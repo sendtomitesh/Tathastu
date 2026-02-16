@@ -1,0 +1,21 @@
+{
+  "openai": { "model": "gpt-4o-mini" },
+  "whatsapp": { "onlyFromMe": true, "onlyPrivateChats": true, "onlySelfChat": false },
+  "skills": [
+    {
+      "id": "tally",
+      "enabled": true,
+      "name": "Tally",
+      "config": { "port": 9000, "companyName": null },
+      "actions": [
+        { "id": "get_ledger", "description": "Get ledger or statement for a party by name", "parameters": ["party_name"] },
+        { "id": "get_vouchers", "description": "Get vouchers, optionally by date range and voucher type", "parameters": ["date_from", "date_to", "voucher_type", "limit"] },
+        { "id": "list_ledgers", "description": "List ledgers, optionally filtered by group", "parameters": ["group_filter"] }
+      ]
+    }
+  ],
+  "tenants": [
+    { "id": "employee_1", "name": "Employee 1", "sessionDir": ".wwebjs_auth_employee_1" },
+    { "id": "employee_2", "name": "Employee 2", "sessionDir": ".wwebjs_auth_employee_2" }
+  ]
+}

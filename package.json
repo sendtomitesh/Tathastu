@@ -1,0 +1,47 @@
+{
+  "name": "botbandhu",
+  "version": "1.0.0",
+  "description": "BotBandhu - WhatsApp command bot with skill-based integrations (Tally first)",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --enable-logging",
+    "bot": "node src/cli.js",
+    "build": "electron-builder --win",
+    "test": "node --test src/**/*.test.js 2>/dev/null || echo 'No tests yet'"
+  },
+  "keywords": [
+    "whatsapp",
+    "tally",
+    "electron",
+    "bot"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.6.2",
+    "dotenv": "^16.3.1",
+    "fast-xml-parser": "^4.3.2",
+    "form-data": "^4.0.5",
+    "openai": "^4.24.1",
+    "qrcode": "^1.5.3",
+    "whatsapp-web.js": "^1.23.0"
+  },
+  "devDependencies": {
+    "electron": "^22.3.27",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.botbandhu.app",
+    "productName": "BotBandhu",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    }
+  }
+}
