@@ -22,7 +22,14 @@ function buildSystemPrompt(config) {
     'You are a helpful assistant that runs commands across connected services (e.g. accounting, CRM, tools). The user sends a message.',
     'Return ONLY valid JSON, no markdown or explanation.',
     '',
-    'If the message matches one of the actions below, return: {"skillId":"<id>","action":"<action>","params":{...}}',
+    'IMPORTANT: You will receive recent conversation history. Use it to resolve references like "his", "their", "that party", "payable for them", etc.',
+    'For example, if the user previously asked about "Dharmesh" and now says "payable", infer they mean get_party_balance for Dharmesh.',
+    'If the previous bot reply listed suggestions (numbered list of party names), and the user replies with a number or a name from that list, use that name as the party_name and REPEAT the same action that was originally requested.',
+    'For example: if user asked "ledger for meril", bot replied with a numbered list, and user says "2" or "Meril Life Sciences Pvt Ltd", return get_ledger with that party_name.',
+    'ALWAYS try to extract a party_name from the user message even if partial or misspelled. Never return party_name as null if the user mentioned any name.',
+    '',
+    'If the message matches one of the actions below, return: {"skillId":"<id>","action":"<action>","params":{"param_name":"value"}}',
+    'CRITICAL: params MUST be a JSON object with named keys, NOT an array. Example: {"party_name":"Meril"} not ["Meril"]',
     'If the message does NOT match any action (greeting, question, unclear, or off-topic), return:',
     '{"skillId":null,"action":"unknown","params":{},"suggestedReply":"Your brief friendly reply here."}',
     '',
@@ -35,6 +42,10 @@ function buildSystemPrompt(config) {
     lines.push(`- skillId="${a.skillId}", action="${a.actionId}", params: [${paramsStr}]. ${a.description}`);
   }
   lines.push('');
+  // Tell the LLM today's date so it can resolve relative dates like "yesterday", "last week"
+  const now = new Date();
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  lines.push(`Today's date is ${todayStr}. Use this to resolve relative dates like "yesterday", "last week", "this month", "last 7 days", etc. into actual YYYY-MM-DD values for date_from and date_to.`);
   lines.push('Extract parameter values from the user message. Use null for missing optional params. For dates use YYYY-MM-DD or YYYYMMDD. For limit use a number.');
   return lines.join('\n');
 }
@@ -42,26 +53,38 @@ function buildSystemPrompt(config) {
 function parseJsonResponse(content) {
   const cleaned = (content || '').replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
   const parsed = JSON.parse(cleaned);
+  // Ensure params is a plain object, not an array
+  let params = parsed.params;
+  if (Array.isArray(params)) {
+    params = {};
+  } else if (!params || typeof params !== 'object') {
+    params = {};
+  }
   return {
     skillId: parsed.skillId === undefined || parsed.skillId === null ? null : String(parsed.skillId),
     action: typeof parsed.action === 'string' ? parsed.action : 'unknown',
-    params: parsed.params && typeof parsed.params === 'object' ? parsed.params : {},
+    params,
     suggestedReply: typeof parsed.suggestedReply === 'string' ? parsed.suggestedReply.trim() : null,
   };
 }
 
 /** OpenAI (or any OpenAI-compatible API, e.g. Groq). */
-async function parseWithOpenAI(userMessage, config, apiKey = process.env.OPENAI_API_KEY) {
+async function parseWithOpenAI(userMessage, config, apiKey = process.env.OPENAI_API_KEY, history = []) {
   if (!apiKey) throw new Error('OPENAI_API_KEY is not set (required for provider: openai)');
   const model = config.llm?.model || config.openai?.model || 'gpt-4o-mini';
   const baseURL = config.llm?.baseUrl || undefined;
   const openai = new OpenAI({ apiKey, ...(baseURL && { baseURL }) });
+
+  // Build messages: system + recent history + current user message
+  const msgs = [{ role: 'system', content: buildSystemPrompt(config) }];
+  for (const h of history) {
+    msgs.push({ role: h.role, content: h.content });
+  }
+  msgs.push({ role: 'user', content: userMessage });
+
   const completion = await openai.chat.completions.create({
     model,
-    messages: [
-      { role: 'system', content: buildSystemPrompt(config) },
-      { role: 'user', content: userMessage },
-    ],
+    messages: msgs,
     temperature: 0.1,
     max_tokens: 500,
   });
@@ -74,20 +97,20 @@ async function parseWithOpenAI(userMessage, config, apiKey = process.env.OPENAI_
 }
 
 /** Ollama (local, no API key). Requires Ollama running with a model (e.g. llama3.2, mistral). */
-async function parseWithOllama(userMessage, config) {
+async function parseWithOllama(userMessage, config, history = []) {
   const model = config.llm?.model || 'llama3.2';
   const baseUrl = (config.llm?.baseUrl || 'http://localhost:11434').replace(/\/$/, '');
+
+  const msgs = [{ role: 'system', content: buildSystemPrompt(config) }];
+  for (const h of history) {
+    msgs.push({ role: h.role, content: h.content });
+  }
+  msgs.push({ role: 'user', content: userMessage });
+
   const res = await fetch(`${baseUrl}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: buildSystemPrompt(config) },
-        { role: 'user', content: userMessage },
-      ],
-      stream: false,
-    }),
+    body: JSON.stringify({ model, messages: msgs, stream: false }),
   });
   if (!res.ok) throw new Error('Ollama request failed: ' + res.status + ' ' + (await res.text()));
   const data = await res.json();
@@ -149,11 +172,15 @@ function getProvider(config) {
 /**
  * Parse user message and return { skillId, action, params, suggestedReply }.
  * Provider is chosen from config.llm.provider: 'openai' | 'ollama' | 'keyword'.
+ * @param {string} userMessage
+ * @param {object} config
+ * @param {string} [apiKey]
+ * @param {Array<{role: string, content: string}>} [history] - Recent conversation history
  */
-async function parseIntent(userMessage, config, apiKey = process.env.OPENAI_API_KEY) {
+async function parseIntent(userMessage, config, apiKey = process.env.OPENAI_API_KEY, history = []) {
   const provider = getProvider(config);
-  if (provider === 'openai') return parseWithOpenAI(userMessage, config, apiKey);
-  if (provider === 'ollama') return parseWithOllama(userMessage, config);
+  if (provider === 'openai') return parseWithOpenAI(userMessage, config, apiKey, history);
+  if (provider === 'ollama') return parseWithOllama(userMessage, config, history);
   if (provider === 'keyword') return parseWithKeyword(userMessage, config);
   throw new Error('Unknown LLM provider: ' + provider + '. Use openai, ollama, or keyword.');
 }

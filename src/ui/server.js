@@ -5,9 +5,16 @@
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
+const messageStore = require('./messageStore');
 
 const PORT = process.env.MPBOT_UI_PORT || 3750;
 const CONFIG_PATH = process.env.CONFIG_PATH || path.join(process.cwd(), 'config', 'skills.json');
+
+// Reset session callback — set by cli.js
+let onResetSession = null;
+function setResetHandler(handler) {
+  onResetSession = handler;
+}
 
 function getResolvedConfigPath() {
   return path.isAbsolute(CONFIG_PATH) ? CONFIG_PATH : path.join(process.cwd(), CONFIG_PATH);
@@ -94,6 +101,11 @@ function addTenantLog(tenantId, text) {
 function addMessage(message) {
   state.messages.push(message);
   if (state.messages.length > 500) state.messages.shift();
+  try {
+    messageStore.append(messageStore.DEFAULT_TENANT_ID, message);
+  } catch (err) {
+    console.error('[messageStore] append failed:', err.message);
+  }
 }
 
 function addTenantMessage(tenantId, message) {
@@ -101,6 +113,11 @@ function addTenantMessage(tenantId, message) {
     if (!tenantsState[tenantId].messages) tenantsState[tenantId].messages = [];
     tenantsState[tenantId].messages.push(message);
     if (tenantsState[tenantId].messages.length > 500) tenantsState[tenantId].messages.shift();
+    try {
+      messageStore.append(tenantId, message);
+    } catch (err) {
+      console.error('[messageStore] append failed:', err.message);
+    }
   }
 }
 
@@ -139,7 +156,7 @@ const SINGLE_HTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>BotBandhu</title>
+  <title>TathastuBhav</title>
   <style>
     * { box-sizing: border-box; }
     body { font-family: system-ui, sans-serif; margin: 0; padding: 20px; background: #1a1a2e; color: #eee; min-height: 100vh; }
@@ -156,13 +173,32 @@ const SINGLE_HTML = `<!DOCTYPE html>
 </head>
 <body>
   <div class="container">
-    <h1>BotBandhu</h1>
+    <h1>TathastuBhav</h1>
     <p id="status" class="status">Connecting…</p>
-    <div style="margin-bottom:12px;"><a href="/chat" style="color:#60a5fa;text-decoration:none;font-size:0.85rem;">💬 View Conversation</a> | <a href="/admin" style="color:#60a5fa;text-decoration:none;font-size:0.85rem;">⚙️ Admin</a></div>
+    <div style="margin-bottom:12px;"><a href="/chat" style="color:#60a5fa;text-decoration:none;font-size:0.85rem;">💬 View Conversation</a> | <a href="/admin" style="color:#60a5fa;text-decoration:none;font-size:0.85rem;">⚙️ Admin</a> | <button id="resetBtn" onclick="resetSession()" style="background:none;border:none;color:#f87171;cursor:pointer;font-size:0.85rem;padding:0;">🔄 Reset Session</button></div>
     <div id="qrcode" class="qrcode"></div>
     <div id="log" class="log"></div>
   </div>
   <script>
+    function resetSession() {
+      if (!confirm('This will clear the WhatsApp session and show a new QR code. Continue?')) return;
+      var btn = document.getElementById('resetBtn');
+      btn.disabled = true;
+      btn.textContent = 'Resetting…';
+      document.getElementById('status').textContent = 'Resetting session…';
+      fetch('/api/reset-session', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          btn.disabled = false;
+          btn.textContent = '🔄 Reset Session';
+          if (d.error) { alert('Reset failed: ' + d.error); }
+        })
+        .catch(function(e) {
+          btn.disabled = false;
+          btn.textContent = '🔄 Reset Session';
+          alert('Reset failed: ' + e);
+        });
+    }
     function poll() {
       fetch('/api/status').then(r => r.json()).then(d => {
         if (d.mode !== 'single') return;
@@ -189,7 +225,7 @@ const MULTI_HTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>BotBandhu – Register WhatsApp</title>
+  <title>TathastuBhav – Register WhatsApp</title>
   <style>
     * { box-sizing: border-box; }
     body { font-family: system-ui, sans-serif; margin: 0; padding: 20px; background: #1a1a2e; color: #eee; min-height: 100vh; }
@@ -236,7 +272,7 @@ function getAdminHtml() {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>BotBandhu – Admin</title>
+  <title>TathastuBhav – Admin</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: #e2e8f0; min-height: 100vh; padding: 0; }
@@ -533,7 +569,7 @@ function getChatHtml() {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>BotBandhu – Conversation</title>
+  <title>TathastuBhav – Conversation</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: #e2e8f0; min-height: 100vh; display: flex; flex-direction: column; }
@@ -725,6 +761,25 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({ messages }));
     return;
   }
+  if (url === '/api/reset-session' && req.method === 'POST') {
+    if (!onResetSession) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Reset handler not registered' }));
+      return;
+    }
+    setStatus('connecting', 'Resetting session…');
+    setQr(null);
+    onResetSession()
+      .then(() => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      })
+      .catch((err) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message || String(err) }));
+      });
+    return;
+  }
   res.writeHead(404);
   res.end();
 });
@@ -734,10 +789,18 @@ function start(options = {}) {
   if (tenantList.length > 0) {
     initTenants(tenantList);
   }
+  messageStore.init();
+  if (state.mode === 'multi') {
+    for (const tenantId of Object.keys(tenantsState)) {
+      tenantsState[tenantId].messages = messageStore.loadForTenant(tenantId);
+    }
+  } else {
+    state.messages = messageStore.loadForTenant(messageStore.DEFAULT_TENANT_ID);
+  }
   return new Promise((resolve) => {
     server.listen(PORT, '127.0.0.1', () => {
       const url = `http://127.0.0.1:${PORT}`;
-      console.log('BotBandhu UI: open in your browser →', url);
+      console.log('TathastuBhav UI: open in your browser →', url);
       console.log('Config UI: ' + url + '/admin');
       console.log('Conversation UI: ' + url + '/chat');
       resolve({
@@ -750,6 +813,7 @@ function start(options = {}) {
         addTenantLog,
         addMessage,
         addTenantMessage,
+        setResetHandler,
         openBrowser: () => openBrowser(url),
       });
     });
@@ -761,5 +825,5 @@ function openBrowser(url) {
   require('child_process').exec(start + ' "' + url + '"', () => {});
 }
 
-module.exports = { start, openBrowser, setStatus, setQr, addLog, setTenantStatus, setTenantQr, addTenantLog, initTenants, addMessage, addTenantMessage, getMessages };
+module.exports = { start, openBrowser, setStatus, setQr, addLog, setTenantStatus, setTenantQr, addTenantLog, initTenants, addMessage, addTenantMessage, getMessages, setResetHandler };
 module.exports.state = state;

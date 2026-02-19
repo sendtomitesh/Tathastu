@@ -18,35 +18,76 @@ const { start: startUi } = require('./ui/server');
 
 async function runSingleTenant(config, ui) {
   const sessionDir = process.env.MPBOT_SESSION_DIR || '.wwebjs_auth';
-  const waClient = createClient({
-    dataPath: path.isAbsolute(sessionDir) ? sessionDir : path.join(cwd, sessionDir),
-    onQr: async (qr) => {
-      try {
-        const dataUrl = await QRCode.toDataURL(qr, { width: 260, margin: 1 });
-        ui.setQr(dataUrl);
-        ui.setStatus('qr', 'Scan this QR with WhatsApp (Linked Devices)');
-      } catch (e) {
-        ui.setStatus('error', 'QR error: ' + (e.message || e));
+  const sessionPath = path.isAbsolute(sessionDir) ? sessionDir : path.join(cwd, sessionDir);
+  let waClient = null;
+  let orchestrator = null;
+
+  async function startClient() {
+    waClient = createClient({
+      dataPath: sessionPath,
+      onQr: async (qr) => {
+        try {
+          const dataUrl = await QRCode.toDataURL(qr, { width: 260, margin: 1 });
+          ui.setQr(dataUrl);
+          ui.setStatus('qr', 'Scan this QR with WhatsApp (Linked Devices)');
+        } catch (e) {
+          ui.setStatus('error', 'QR error: ' + (e.message || e));
+        }
+      },
+      onReady: () => {
+        ui.setQr(null);
+        ui.setStatus('ready', 'Connected. Send a message to run commands.');
+      },
+      onMessage: (message) => {
+        ui.addLog('Incoming message event');
+        orchestrator.handleMessage(message).catch((err) => {
+          ui.addLog('Handle error: ' + (err.message || err));
+        });
+      },
+    });
+    orchestrator = createOrchestrator({
+      config,
+      client: waClient,
+      onLog: (text) => ui.addLog(text),
+      onMessage: (msg) => ui.addMessage(msg),
+    });
+    await initialize(waClient);
+  }
+
+  // Register reset handler: destroy client, clear session, restart
+  ui.setResetHandler(async () => {
+    ui.addLog('Resetting WhatsApp session…');
+    try {
+      if (waClient) {
+        await waClient.destroy().catch(() => {});
       }
-    },
-    onReady: () => {
-      ui.setQr(null);
-      ui.setStatus('ready', 'Connected. Send a message to run commands.');
-    },
-    onMessage: (message) => {
-      ui.addLog('Incoming message event');
-      orchestrator.handleMessage(message).catch((err) => {
-        ui.addLog('Handle error: ' + (err.message || err));
-      });
-    },
+    } catch (e) { /* ignore */ }
+    // Kill any lingering Chrome processes
+    try {
+      require('child_process').execSync('taskkill /F /IM chrome.exe /T 2>nul', { stdio: 'ignore' });
+    } catch (e) { /* ignore - no chrome running */ }
+    // Clear session directory
+    const fs = require('fs');
+    try {
+      fs.rmSync(sessionPath, { recursive: true, force: true });
+      ui.addLog('Session cleared');
+    } catch (e) {
+      ui.addLog('Could not clear session: ' + (e.message || e));
+    }
+    // Wait a moment for cleanup
+    await new Promise((r) => setTimeout(r, 2000));
+    // Restart client
+    ui.setStatus('connecting', 'Starting WhatsApp…');
+    ui.setQr(null);
+    try {
+      await startClient();
+    } catch (err) {
+      ui.setStatus('error', 'WhatsApp init failed: ' + (err.message || err));
+      throw err;
+    }
   });
-  const orchestrator = createOrchestrator({ 
-    config, 
-    client: waClient, 
-    onLog: (text) => ui.addLog(text),
-    onMessage: (msg) => ui.addMessage(msg)
-  });
-  await initialize(waClient).catch((err) => {
+
+  await startClient().catch((err) => {
     ui.setStatus('error', 'WhatsApp init failed: ' + (err.message || err));
     throw err;
   });

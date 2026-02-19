@@ -4,5 +4,6 @@ dist/
 .wwebjs_auth/
 .wwebjs_auth_*/
 .wwebjs_cache/
+data/
 *.log
 .DS_Store

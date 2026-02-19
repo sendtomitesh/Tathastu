@@ -11,20 +11,43 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
  */
 function createClient(options = {}) {
   const dataPath = options.dataPath || path.join(process.cwd(), '.wwebjs_auth');
+  const puppeteerOpts = {
+    headless: 'new',
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-gpu',
+      '--disable-dev-shm-usage',
+      '--no-first-run',
+    ],
+  };
+  // Use system Chrome when PUPPETEER_SKIP_DOWNLOAD was used (e.g. Windows)
+  const exePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+  if (exePath) {
+    puppeteerOpts.executablePath = exePath;
+  }
   const client = new Client({
     authStrategy: new LocalAuth({ dataPath }),
-    puppeteer: {
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    },
+    puppeteer: puppeteerOpts,
   });
 
-  if (options.onQr) {
-    client.on('qr', options.onQr);
-  }
-  if (options.onReady) {
-    client.on('ready', options.onReady);
-  }
+  // Verbose lifecycle logging so we can see what's happening
+  const log = (...args) => console.log('[wa]', ...args);
+
+  client.on('qr', (qr) => {
+    log('QR code received');
+    if (options.onQr) options.onQr(qr);
+  });
+  client.on('ready', () => {
+    log('Client READY');
+    if (options.onReady) options.onReady();
+  });
+  client.on('authenticated', () => log('Authenticated'));
+  client.on('auth_failure', (msg) => log('Auth failure:', msg));
+  client.on('disconnected', (reason) => log('Disconnected:', reason));
+  client.on('loading_screen', (percent, msg) => log('Loading:', percent + '%', msg));
+  client.on('change_state', (state) => log('State:', state));
+
   if (options.onMessage) {
     // 'message' only fires for messages FROM OTHERS (library skips fromMe). Use 'message_create' to get your own messages too.
     client.on('message_create', options.onMessage);

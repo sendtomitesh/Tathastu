@@ -1,0 +1,9 @@
+[Collection: LedgerMasterInfo]
+Collection: LedgerMasterInfo
+Type: Ledger
+Fetch: Name, GSTIN, OpeningBalance, ClosingBalance, Parent
+
+[Report: LedgerMasterInfo]
+Report: LedgerMasterInfo
+Type: Ledger
+Fetch: Name, GSTIN, OpeningBalance, ClosingBalance, Parent

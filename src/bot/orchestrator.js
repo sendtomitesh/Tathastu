@@ -25,6 +25,10 @@ function createOrchestrator(options = {}) {
   const messages = [];
   const MAX_MESSAGES = 500; // Keep last 500 messages
   
+  // Conversation history for LLM context (user + assistant pairs)
+  const conversationHistory = [];
+  const MAX_HISTORY = 10; // Keep last 10 turns (5 user + 5 bot)
+  
   // Initialize Sarvam translation client if enabled
   let sarvamClient = null;
   if (config.translation?.enabled && config.translation?.apiKey) {
@@ -302,33 +306,15 @@ function createOrchestrator(options = {}) {
 
     onLog('Msg: "' + (userText.slice(0, 25) + (userText.length > 25 ? '…' : '')) + '" fromMe=' + message.fromMe);
 
-    // Translate incoming text to English if needed
+    // Skip Sarvam for text messages — OpenAI handles English/Hindi/Gujarati text fine.
+    // Sarvam is only used for audio transcription (handled above).
+    // For audio messages, userLang was already set by the transcription step.
     let textForProcessing = userText;
-    if (sarvamClient && userText) {
-      try {
-        // Detect language first
-        const detected = await sarvamClient.detectLanguage(userText);
-        userLang = detected.lang || 'en-IN';
-        onLog('[translation] Detected language: ' + userLang);
-        
-        // Translate to English if not already English
-        if (userLang !== 'en-IN' && userLang !== 'en') {
-          textForProcessing = await sarvamClient.translate(userText, {
-            from: userLang,
-            to: 'en-IN',
-            model: config.translation?.model || 'mayura:v1',
-          });
-          onLog('[translation] Translated to English: "' + (textForProcessing.slice(0, 30) + '...') + '"');
-        }
-      } catch (err) {
-        onLog('[translation] Translation error: ' + (err.message || err));
-        // Continue with original text
-      }
-    }
+    const SUPPORTED_LANGS = ['en-IN', 'en', 'hi-IN', 'gu-IN'];
 
     let responseText;
     try {
-      const { skillId, action, params, suggestedReply } = await parseIntent(textForProcessing, config);
+      const { skillId, action, params, suggestedReply } = await parseIntent(textForProcessing, config, process.env.OPENAI_API_KEY, conversationHistory);
       if (skillId == null || action === 'unknown') {
         responseText = (suggestedReply && suggestedReply.length > 0)
           ? suggestedReply
@@ -344,9 +330,16 @@ function createOrchestrator(options = {}) {
       onLog('Error: ' + (err.message || err));
     }
 
-    // Translate reply back to user's language if enabled
+    // Update conversation history for context in future messages
+    conversationHistory.push({ role: 'user', content: textForProcessing });
+    conversationHistory.push({ role: 'assistant', content: responseText });
+    while (conversationHistory.length > MAX_HISTORY) {
+      conversationHistory.shift();
+    }
+
+    // Translate reply back to user's language if enabled (only for supported languages)
     let finalResponseText = responseText;
-    if (sarvamClient && config.translation?.translateReplies && userLang !== 'en-IN' && userLang !== 'en') {
+    if (sarvamClient && config.translation?.translateReplies && userLang !== 'en-IN' && userLang !== 'en' && SUPPORTED_LANGS.includes(userLang)) {
       try {
         finalResponseText = await sarvamClient.translate(responseText, {
           from: 'en-IN',

@@ -4,7 +4,7 @@ const app = (electron && typeof electron === 'object' && electron.app) ? electro
 const BrowserWindow = (electron && typeof electron === 'object' && electron.BrowserWindow) ? electron.BrowserWindow : undefined;
 
 if (!app || !BrowserWindow) {
-  console.error('BotBandhu: Electron UI is not available on this setup.');
+  console.error('TathastuBhav: Electron UI is not available on this setup.');
   console.error('Run the bot with: npm run bot   (QR will show in the terminal)');
   process.exit(1);
 }

@@ -1,4 +1,4 @@
-# BotBandhu
+# TathastuBhav
 
 WhatsApp command bot with a skill-based architecture. Connects via QR, uses OpenAI (or Ollama/Keyword) to understand natural-language commands, and executes actions (Tally first) via configuration-driven skills. Supports multi-language translation (Sarvam AI), audio transcription, and provides a conversation UI for employees to view their chat history.
 

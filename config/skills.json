@@ -14,7 +14,7 @@
       "name": "Tally",
       "config": {
         "port": "9000",
-        "companyName": "Mobibox softech pvt. ltd."
+        "companyName": "SendMe Technologies Pvt Ltd"
       },
       "actions": [
         {
@@ -26,7 +26,7 @@
         },
         {
           "id": "get_vouchers",
-          "description": "Get vouchers, optionally by date range and voucher type (e.g. Sales, Purchase, Payment, Receipt)",
+          "description": "Get vouchers, optionally by date range and voucher type (e.g. Sales, Purchase, Payment, Receipt). Defaults to today if no date given.",
           "parameters": [
             "date_from",
             "date_to",
@@ -35,10 +35,48 @@
           ]
         },
         {
+          "id": "get_daybook",
+          "description": "Get today's daybook (all entries for today). Use for 'what happened today', 'today's entries', 'daybook'. Can also show for a specific date.",
+          "parameters": [
+            "date_from",
+            "date_to"
+          ]
+        },
+        {
           "id": "list_ledgers",
           "description": "List ledgers, optionally filtered by group (e.g. Sundry Debtors, Bank Accounts)",
           "parameters": [
             "group_filter"
+          ]
+        },
+        {
+          "id": "get_party_gstin",
+          "description": "Get GSTIN number for a party",
+          "parameters": [
+            "party_name"
+          ]
+        },
+        {
+          "id": "get_party_balance",
+          "description": "Get receivable or payable balance for a party",
+          "parameters": [
+            "party_name"
+          ]
+        },
+        {
+          "id": "get_outstanding",
+          "description": "Get outstanding payable or receivable report. Use type=payable for what we owe, type=receivable for what others owe us",
+          "parameters": [
+            "type"
+          ]
+        },
+        {
+          "id": "get_sales_report",
+          "description": "Get sales or purchase report with party-wise breakdown. Use type=sales or type=purchase. Defaults to current month. Use for 'show sales this month', 'total purchases in January', 'sales report'.",
+          "parameters": [
+            "type",
+            "date_from",
+            "date_to"
           ]
         }
       ]
