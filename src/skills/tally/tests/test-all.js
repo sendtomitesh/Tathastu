@@ -582,6 +582,28 @@ test('generate invoice HTML', () => {
   assert(html.includes('CGST Output'), 'should have tax entry');
   assert(html.includes('Test Company Pvt Ltd'), 'should have company name');
   assert(html.includes('24AABCM1234F1Z5'), 'should have GSTIN');
+  assert(html.includes('Tax Invoice'), 'should have Tax Invoice title');
+  assert(html.includes('Authorised Signatory'), 'should have signatory section');
+  assert(html.includes('Rupees'), 'should have amount in words');
+});
+
+// ── Amount in Words ──
+console.log('\nAmount in Words:');
+test('amountInWords simple', () => {
+  assert(tdl.amountInWords(1000) === 'One Thousand Rupees Only');
+});
+test('amountInWords lakhs', () => {
+  assert(tdl.amountInWords(150000) === 'One Lakh Fifty Thousand Rupees Only');
+});
+test('amountInWords crores', () => {
+  assert(tdl.amountInWords(12345678) === 'One Crore Twenty Three Lakh Forty Five Thousand Six Hundred Seventy Eight Rupees Only');
+});
+test('amountInWords with paise', () => {
+  const result = tdl.amountInWords(59000.50);
+  assert(result.includes('Fifty Nine Thousand') && result.includes('Fifty Paise'), `got: ${result}`);
+});
+test('amountInWords zero', () => {
+  assert(tdl.amountInWords(0) === 'Zero');
 });
 
 // ── Tally Manager ──

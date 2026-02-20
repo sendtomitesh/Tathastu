@@ -208,7 +208,41 @@ function parsePartyDetailResponse(xmlString) {
 }
 
 /**
- * Generate invoice HTML from parsed data.
+ * Convert number to Indian words (e.g. 1,23,456 → "One Lakh Twenty Three Thousand Four Hundred Fifty Six")
+ */
+function amountInWords(num) {
+  if (num === 0) return 'Zero';
+  const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
+    'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+  const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+  function twoDigit(n) {
+    if (n < 20) return ones[n];
+    return tens[Math.floor(n / 10)] + (n % 10 ? ' ' + ones[n % 10] : '');
+  }
+  function threeDigit(n) {
+    if (n === 0) return '';
+    if (n < 100) return twoDigit(n);
+    return ones[Math.floor(n / 100)] + ' Hundred' + (n % 100 ? ' ' + twoDigit(n % 100) : '');
+  }
+  const abs = Math.abs(Math.round(num));
+  const crore = Math.floor(abs / 10000000);
+  const lakh = Math.floor((abs % 10000000) / 100000);
+  const thousand = Math.floor((abs % 100000) / 1000);
+  const rest = abs % 1000;
+  const parts = [];
+  if (crore) parts.push(threeDigit(crore) + ' Crore');
+  if (lakh) parts.push(twoDigit(lakh) + ' Lakh');
+  if (thousand) parts.push(twoDigit(thousand) + ' Thousand');
+  if (rest) parts.push(threeDigit(rest));
+  const rupees = parts.join(' ');
+  // Paise
+  const paise = Math.round((Math.abs(num) - Math.floor(Math.abs(num))) * 100);
+  if (paise > 0) return rupees + ' Rupees and ' + twoDigit(paise) + ' Paise Only';
+  return rupees + ' Rupees Only';
+}
+
+/**
+ * Generate invoice HTML from parsed data — professional GST Tax Invoice format.
  */
 function generateInvoiceHtml(invoice, company, party) {
   const date = invoice.date ? formatTallyDate(invoice.date) : '';
@@ -222,95 +256,140 @@ function generateInvoiceHtml(invoice, company, party) {
   const incomeEntries = nonPartyEntries.filter(e => !taxKeywords.some(k => e.name.toLowerCase().includes(k)));
 
   const subtotal = incomeEntries.reduce((s, e) => s + Math.abs(e.amount), 0);
-  const taxTotal = taxEntries.reduce((s, e) => s + Math.abs(e.amount), 0);
 
+  // Build item rows
   let itemRows = '';
   if (invoice.items.length > 0) {
     invoice.items.forEach((item, i) => {
       itemRows += `<tr>
-        <td>${i + 1}</td><td>${esc(item.name)}</td>
-        <td class="r">${item.qty || ''}</td><td class="r">${item.rate ? '₹' + inr(item.rate) : ''}</td>
-        <td class="r">₹${inr(Math.abs(item.amount))}</td>
+        <td class="c">${i + 1}</td><td>${esc(item.name)}</td>
+        <td class="r">${item.qty || '-'}</td><td class="r">${item.rate ? inr(item.rate) : '-'}</td>
+        <td class="r">${inr(Math.abs(item.amount))}</td>
       </tr>`;
     });
   } else {
     incomeEntries.forEach((entry, i) => {
       itemRows += `<tr>
-        <td>${i + 1}</td><td>${esc(entry.name)}</td>
+        <td class="c">${i + 1}</td><td>${esc(entry.name)}</td>
         <td class="r">-</td><td class="r">-</td>
-        <td class="r">₹${inr(Math.abs(entry.amount))}</td>
+        <td class="r">${inr(Math.abs(entry.amount))}</td>
       </tr>`;
     });
   }
 
+  // Tax rows
   let taxRows = '';
   taxEntries.forEach(entry => {
-    taxRows += `<tr><td colspan="4" class="r">${esc(entry.name)}</td><td class="r">₹${inr(Math.abs(entry.amount))}</td></tr>`;
+    taxRows += `<tr class="tax-row"><td colspan="4" class="r">${esc(entry.name)}</td><td class="r">${inr(Math.abs(entry.amount))}</td></tr>`;
   });
 
-  const companyAddr = company.address.length ? company.address.join('<br>') : '';
+  const companyAddr = company.address.length ? company.address.join(', ') : '';
   const partyAddr = party.address.length ? party.address.join('<br>') : '';
+  const companyState = company.state ? company.state + (company.pincode ? ' - ' + company.pincode : '') : '';
+  const partyState = party.state || '';
+
+  // Determine invoice title based on voucher type
+  const vchType = (invoice.type || 'Sales').toLowerCase();
+  let invoiceTitle = 'Tax Invoice';
+  if (vchType.includes('purchase')) invoiceTitle = 'Purchase Invoice';
+  else if (vchType.includes('credit')) invoiceTitle = 'Credit Note';
+  else if (vchType.includes('debit')) invoiceTitle = 'Debit Note';
+  else if (vchType.includes('receipt')) invoiceTitle = 'Receipt';
+  else if (vchType.includes('payment')) invoiceTitle = 'Payment Voucher';
 
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; color: #333; padding: 30px; }
-  .inv { max-width: 800px; margin: 0 auto; border: 1px solid #ccc; padding: 30px; }
-  .header { display: flex; justify-content: space-between; border-bottom: 2px solid #2a67b1; padding-bottom: 15px; margin-bottom: 20px; }
-  .company { font-size: 18px; font-weight: bold; color: #2a67b1; }
-  .company-detail { font-size: 11px; color: #666; margin-top: 4px; }
-  .inv-title { text-align: right; }
-  .inv-title h2 { color: #2a67b1; font-size: 22px; margin-bottom: 5px; }
-  .inv-title .num { font-size: 14px; font-weight: bold; }
-  .inv-title .date { font-size: 12px; color: #666; }
-  .parties { display: flex; justify-content: space-between; margin-bottom: 20px; }
-  .party-box { width: 48%; }
-  .party-box .label { font-size: 10px; text-transform: uppercase; color: #999; font-weight: bold; margin-bottom: 4px; }
-  .party-box .name { font-weight: bold; font-size: 14px; }
-  .party-box .addr { font-size: 11px; color: #666; margin-top: 2px; }
-  .party-box .gstin { font-size: 11px; color: #444; margin-top: 4px; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 15px; }
-  th { background: #2a67b1; color: white; padding: 8px 10px; text-align: left; font-size: 12px; }
-  td { padding: 6px 10px; border-bottom: 1px solid #eee; font-size: 12px; }
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #000; }
+  .page { max-width: 780px; margin: 0 auto; border: 2px solid #000; }
+  /* Header */
+  .hdr { border-bottom: 2px solid #000; padding: 12px 16px; text-align: center; }
+  .hdr .co-name { font-size: 18px; font-weight: bold; text-transform: uppercase; }
+  .hdr .co-addr { font-size: 10px; color: #333; margin-top: 2px; }
+  .hdr .co-gstin { font-size: 11px; font-weight: bold; margin-top: 4px; }
+  .hdr .inv-type { font-size: 14px; font-weight: bold; margin-top: 6px; text-decoration: underline; }
+  /* Info grid */
+  .info { display: table; width: 100%; border-bottom: 1px solid #000; }
+  .info-row { display: table-row; }
+  .info-left, .info-right { display: table-cell; width: 50%; padding: 8px 16px; vertical-align: top; }
+  .info-right { border-left: 1px solid #000; }
+  .info label { font-weight: bold; font-size: 10px; text-transform: uppercase; color: #555; }
+  .info .val { font-size: 11px; margin-top: 1px; }
+  .info .party-name { font-size: 13px; font-weight: bold; }
+  .info .gstin-val { font-weight: bold; }
+  /* Items table */
+  table.items { width: 100%; border-collapse: collapse; }
+  table.items th { background: #f0f0f0; border-bottom: 2px solid #000; border-top: 1px solid #000; padding: 6px 8px; font-size: 10px; text-transform: uppercase; font-weight: bold; }
+  table.items td { padding: 5px 8px; border-bottom: 1px solid #ddd; font-size: 11px; }
+  table.items tr:last-child td { border-bottom: none; }
   .r { text-align: right; }
-  .total-row td { font-weight: bold; border-top: 2px solid #2a67b1; font-size: 14px; }
-  .narration { font-size: 11px; color: #666; margin-top: 10px; font-style: italic; }
-  .footer { margin-top: 30px; text-align: center; font-size: 10px; color: #999; border-top: 1px solid #eee; padding-top: 10px; }
+  .c { text-align: center; }
+  .tax-row td { border-bottom: 1px solid #ddd; font-size: 10px; color: #444; }
+  /* Subtotal / Total */
+  .sub-row td { border-top: 1px solid #999; font-weight: bold; }
+  .total-section { border-top: 2px solid #000; padding: 8px 16px; }
+  .total-line { display: flex; justify-content: space-between; font-size: 14px; font-weight: bold; }
+  .words { font-size: 10px; color: #333; margin-top: 4px; font-style: italic; }
+  /* Footer */
+  .foot { border-top: 1px solid #000; display: table; width: 100%; }
+  .foot-left, .foot-right { display: table-cell; width: 50%; padding: 10px 16px; vertical-align: top; }
+  .foot-right { border-left: 1px solid #000; text-align: right; }
+  .foot .narr { font-size: 10px; color: #555; font-style: italic; }
+  .foot .sign-label { font-size: 10px; color: #555; margin-top: 30px; }
+  .foot .sign-name { font-size: 11px; font-weight: bold; }
+  .powered { text-align: center; font-size: 9px; color: #999; padding: 4px; border-top: 1px solid #ddd; }
 </style></head><body>
-<div class="inv">
-  <div class="header">
-    <div>
-      <div class="company">${esc(company.name)}</div>
-      <div class="company-detail">${companyAddr}</div>
-      ${company.state ? `<div class="company-detail">${esc(company.state)}${company.pincode ? ' - ' + esc(company.pincode) : ''}</div>` : ''}
-      ${company.gstin ? `<div class="company-detail">GSTIN: ${esc(company.gstin)}</div>` : ''}
-      ${company.phone ? `<div class="company-detail">Ph: ${esc(company.phone)}</div>` : ''}
-    </div>
-    <div class="inv-title">
-      <h2>${esc(invoice.type)}</h2>
-      <div class="num">#${esc(invoice.number)}</div>
-      <div class="date">${date}</div>
+<div class="page">
+  <div class="hdr">
+    <div class="co-name">${esc(company.name)}</div>
+    ${companyAddr ? `<div class="co-addr">${esc(companyAddr)}</div>` : ''}
+    ${companyState ? `<div class="co-addr">${esc(companyState)}</div>` : ''}
+    ${company.phone ? `<div class="co-addr">Ph: ${esc(company.phone)}${company.email ? ' | ' + esc(company.email) : ''}</div>` : ''}
+    ${company.gstin ? `<div class="co-gstin">GSTIN: ${esc(company.gstin)}</div>` : ''}
+    <div class="inv-type">${esc(invoiceTitle)}</div>
+  </div>
+  <div class="info">
+    <div class="info-row">
+      <div class="info-left">
+        <label>Bill To</label>
+        <div class="val party-name">${esc(partyName)}</div>
+        ${partyAddr ? `<div class="val">${partyAddr}</div>` : ''}
+        ${partyState ? `<div class="val">${esc(partyState)}</div>` : ''}
+        ${party.gstin ? `<div class="val gstin-val">GSTIN: ${esc(party.gstin)}</div>` : ''}
+        ${party.phone ? `<div class="val">Ph: ${esc(party.phone)}</div>` : ''}
+      </div>
+      <div class="info-right">
+        <label>Invoice No.</label>
+        <div class="val" style="font-weight:bold;font-size:13px;">${esc(invoice.number)}</div>
+        <div style="margin-top:8px;"><label>Date</label></div>
+        <div class="val">${date}</div>
+        <div style="margin-top:8px;"><label>Voucher Type</label></div>
+        <div class="val">${esc(invoice.type)}</div>
+      </div>
     </div>
   </div>
-  <div class="parties">
-    <div class="party-box">
-      <div class="label">Bill To</div>
-      <div class="name">${esc(partyName)}</div>
-      ${partyAddr ? `<div class="addr">${partyAddr}</div>` : ''}
-      ${party.gstin ? `<div class="gstin">GSTIN: ${esc(party.gstin)}</div>` : ''}
-    </div>
-  </div>
-  <table>
-    <thead><tr><th>#</th><th>Description</th><th class="r">Qty</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead>
+  <table class="items">
+    <thead><tr><th class="c" style="width:40px">#</th><th>Particulars</th><th class="r" style="width:70px">Qty</th><th class="r" style="width:90px">Rate (₹)</th><th class="r" style="width:100px">Amount (₹)</th></tr></thead>
     <tbody>
       ${itemRows}
-      <tr><td colspan="4" class="r"><strong>Subtotal</strong></td><td class="r"><strong>₹${inr(subtotal)}</strong></td></tr>
+      <tr class="sub-row"><td colspan="4" class="r">Subtotal</td><td class="r">${inr(subtotal)}</td></tr>
       ${taxRows}
-      <tr class="total-row"><td colspan="4" class="r">Total</td><td class="r">₹${inr(totalAmount)}</td></tr>
     </tbody>
   </table>
-  ${invoice.narration ? `<div class="narration">Note: ${esc(invoice.narration)}</div>` : ''}
-  <div class="footer">Generated from TallyPrime via Tathastu</div>
+  <div class="total-section">
+    <div class="total-line"><span>Total</span><span>₹ ${inr(totalAmount)}</span></div>
+    <div class="words">${amountInWords(totalAmount)}</div>
+  </div>
+  <div class="foot">
+    <div class="foot-left">
+      ${invoice.narration ? `<div class="narr">Narration: ${esc(invoice.narration)}</div>` : '<div class="narr">&nbsp;</div>'}
+    </div>
+    <div class="foot-right">
+      <div class="sign-label">For ${esc(company.name)}</div>
+      <div class="sign-label" style="margin-top:24px;">Authorised Signatory</div>
+    </div>
+  </div>
+  <div class="powered">Generated from TallyPrime</div>
 </div>
 </body></html>`;
 }
@@ -352,4 +431,5 @@ module.exports = {
   parsePartyDetailResponse,
   generateInvoiceHtml,
   htmlToPdfBuffer,
+  amountInWords,
 };
