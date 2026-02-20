@@ -20,11 +20,6 @@ function createOrchestrator(options = {}) {
   const onlyFromMe = config.whatsapp?.onlyFromMe !== false;
   const onLog = options.onLog || (() => {});
   const client = options.client || null; // WhatsApp client (for getting user's own number)
-  const onMessage = options.onMessage || null; // Callback to store messages: (message) => void
-  
-  // Message storage for conversation UI (only self-chat messages)
-  const messages = [];
-  const MAX_MESSAGES = 500; // Keep last 500 messages
   
   // Conversation history for LLM context (user + assistant pairs)
   const conversationHistory = [];
@@ -303,21 +298,6 @@ function createOrchestrator(options = {}) {
       isSelfChat = message.fromMe && !chat.isGroup;
     }
 
-    // Store user message if it's a self-chat
-    if (isSelfChat) {
-      const userMessage = {
-        id: 'user_' + Date.now(),
-        type: 'user',
-        text: userText,
-        timestamp: message.timestamp * 1000 || Date.now(), // WhatsApp timestamp is in seconds
-        isAudio: isAudioMessage,
-        originalLang: userLang !== 'en-IN' && userLang !== 'en' ? userLang : null,
-      };
-      messages.push(userMessage);
-      if (messages.length > MAX_MESSAGES) messages.shift();
-      if (onMessage) onMessage(userMessage);
-    }
-
     onLog('Msg: "' + (userText.slice(0, 25) + (userText.length > 25 ? '…' : '')) + '" fromMe=' + message.fromMe);
 
     // Skip Sarvam for text messages — OpenAI handles English/Hindi/Gujarati text fine.
@@ -528,18 +508,6 @@ function createOrchestrator(options = {}) {
           onLog('Attachment send failed: ' + (attErr.message || attErr));
         }
       }
-      
-      // Store bot reply message (without prefix for clean display)
-      const botMessage = {
-        id: 'bot_' + Date.now(),
-        type: 'bot',
-        text: finalResponseText,
-        timestamp: Date.now(),
-        originalLang: userLang !== 'en-IN' && userLang !== 'en' ? userLang : null,
-      };
-      messages.push(botMessage);
-      if (messages.length > MAX_MESSAGES) messages.shift();
-      if (onMessage) onMessage(botMessage);
     } catch (err) {
       onLog('Reply failed: ' + (err.message || err));
     }
@@ -549,7 +517,6 @@ function createOrchestrator(options = {}) {
     handleMessage,
     getConfig: () => config,
     getRegistry: () => registry,
-    getMessages: () => [...messages], // Return copy of messages
     getResolver: () => resolver,
   };
 }

@@ -34,6 +34,13 @@ async function runSingleTenant(config, ui) {
           ui.setStatus('error', 'QR error: ' + (e.message || e));
         }
       },
+      onAuthenticated: () => {
+        ui.setQr(null);
+        ui.setStatus('connecting', 'Authenticated. Syncing…');
+      },
+      onLoadingScreen: (percent, msg) => {
+        ui.setStatus('connecting', 'Syncing: ' + percent + '% ' + (msg || ''));
+      },
       onReady: () => {
         ui.setQr(null);
         ui.setStatus('ready', 'Connected. Send a message to run commands.');
@@ -49,8 +56,8 @@ async function runSingleTenant(config, ui) {
       config,
       client: waClient,
       onLog: (text) => ui.addLog(text),
-      onMessage: (msg) => ui.addMessage(msg),
     });
+    ui.addLog('Launching Chrome & connecting to WhatsApp…');
     await initialize(waClient);
   }
 
@@ -107,6 +114,13 @@ async function runMultiTenant(config, ui) {
           ui.setTenantStatus(tenant.id, 'error', 'QR error: ' + (e.message || e));
         }
       },
+      onAuthenticated: () => {
+        ui.setTenantQr(tenant.id, null);
+        ui.setTenantStatus(tenant.id, 'connecting', 'Authenticated. Syncing…');
+      },
+      onLoadingScreen: (percent, msg) => {
+        ui.setTenantStatus(tenant.id, 'connecting', 'Syncing: ' + percent + '% ' + (msg || ''));
+      },
       onReady: () => {
         ui.setTenantQr(tenant.id, null);
         ui.setTenantStatus(tenant.id, 'ready', 'Connected. Send a message to run commands.');
@@ -121,8 +135,7 @@ async function runMultiTenant(config, ui) {
     const orchestrator = createOrchestrator({ 
       config, 
       client: waClient, 
-      onLog: (text) => ui.addTenantLog(tenant.id, text),
-      onMessage: (msg) => ui.addTenantMessage(tenant.id, msg)
+      onLog: (text) => ui.addTenantLog(tenant.id, text)
     });
     initialize(waClient).catch((err) => {
       ui.setTenantStatus(tenant.id, 'error', 'WhatsApp init failed: ' + (err.message || err));

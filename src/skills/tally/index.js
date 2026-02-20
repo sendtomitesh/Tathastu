@@ -45,18 +45,28 @@ function paginateResult(parsed, items, page, renderLine, header) {
 }
 
 /**
+ * Strip common filler/politeness words from the end of a party name.
+ * "manoj please" → "manoj", "meril sir" → "meril"
+ */
+function cleanPartyName(name) {
+  return (name || '').replace(/\s+(?:please|pls|plz|sir|madam|ji|bhai|bro|dude|thanks|thank\s*you|karo|dikhao|batao|do)\s*$/i, '').trim();
+}
+
+/**
  * Try exact match first. If no result, do a fuzzy CONTAINS search.
  * Returns: { match: 'exact'|'single'|'multiple'|'none', name?, suggestions? }
  */
 async function resolvePartyName(partyName, baseUrl, companyName) {
+  // Clean filler words from the party name
+  const cleaned = cleanPartyName(partyName) || partyName;
   // 1) Exact match — try the name as-is
-  const exactXml = tdlClient.buildSearchLedgersTdlXml(partyName, companyName);
+  const exactXml = tdlClient.buildSearchLedgersTdlXml(cleaned, companyName);
   const exactResp = await tdlClient.postTally(baseUrl, exactXml);
   const exactParsed = tdlClient.parseSearchLedgersResponse(exactResp);
 
   // Check if any result matches exactly (case-insensitive)
   const exactHit = (exactParsed.data || []).find(
-    (l) => l.name.toLowerCase() === partyName.toLowerCase()
+    (l) => l.name.toLowerCase() === cleaned.toLowerCase()
   );
   if (exactHit) {
     return { match: 'exact', name: exactHit.name };
@@ -71,7 +81,7 @@ async function resolvePartyName(partyName, baseUrl, companyName) {
 
   if (results.length > 1) {
     // Score and sort by relevance: prefer names starting with the search term
-    const lower = partyName.toLowerCase();
+    const lower = cleaned.toLowerCase();
     const scored = results.map((r) => {
       const n = r.name.toLowerCase();
       let score = 0;
@@ -88,7 +98,7 @@ async function resolvePartyName(partyName, baseUrl, companyName) {
   }
 
   // 3) No results from CONTAINS — try splitting into words and search each
-  const words = partyName.split(/\s+/).filter((w) => w.length >= 3);
+  const words = cleaned.split(/\s+/).filter((w) => w.length >= 3);
   if (words.length > 1) {
     // Search with the longest word
     const longest = words.sort((a, b) => b.length - a.length)[0];
@@ -106,6 +116,26 @@ async function resolvePartyName(partyName, baseUrl, companyName) {
   }
 
   return { match: 'none' };
+}
+
+/**
+ * When resolvePartyName returns 'none', try word-based search to show relevant suggestions.
+ * Returns a result object with suggestions or a "not found" message.
+ */
+async function handlePartyNotFound(partyName, baseUrl, companyName) {
+  try {
+    const words = partyName.split(/\s+/).filter(w => w.length >= 2);
+    for (const word of words) {
+      const searchXml = tdlClient.buildSearchLedgersTdlXml(word, companyName);
+      const searchResp = await tdlClient.postTally(baseUrl, searchXml);
+      const searchParsed = tdlClient.parseSearchLedgersResponse(searchResp);
+      if (searchParsed.data && searchParsed.data.length > 0) {
+        const sample = searchParsed.data.slice(0, MAX_SUGGESTIONS);
+        return { success: true, message: formatSuggestions(sample, partyName), data: { suggestions: sample } };
+      }
+    }
+  } catch (_) { /* ignore */ }
+  return { success: false, message: `Party "${partyName}" not found in Tally.` };
 }
 
 /**
@@ -176,17 +206,7 @@ async function execute(skillId, action, params = {}, skillConfig = {}) {
     try {
       const resolved = await resolvePartyName(partyName, baseUrl, companyName);
       if (resolved.match === 'none') {
-        // No match at all — try listing some ledgers as suggestions
-        try {
-          const listXml = tdlClient.buildListLedgersTdlXml(null, companyName);
-          const listResp = await tdlClient.postTally(baseUrl, listXml);
-          const listParsed = tdlClient.parseListLedgersTdlResponse(listResp);
-          if (listParsed.data && listParsed.data.length > 0) {
-            const sample = listParsed.data.slice(0, 10).map((l, i) => `${i + 1}. ${l.name}`).join('\n');
-            return { success: false, message: `Party "${partyName}" not found. Here are some ledgers:\n${sample}\n\nReply with the exact name.` };
-          }
-        } catch (e) { /* ignore */ }
-        return { success: false, message: `Party "${partyName}" not found in Tally.` };
+        return await handlePartyNotFound(partyName, baseUrl, companyName);
       }
       if (resolved.match === 'multiple') {
         return { success: true, message: formatSuggestions(resolved.suggestions, partyName), data: { suggestions: resolved.suggestions } };
@@ -199,7 +219,35 @@ async function execute(skillId, action, params = {}, skillConfig = {}) {
       const parsed = tdlClient.parseLedgerStatementTdlResponse(responseXml, resolved.name, 0);
       if (!parsed.success) return { success: false, message: parsed.message || 'Ledger not found.' };
       const entries = parsed.data?.entries || [];
-      if (entries.length === 0) return parsed;
+      if (entries.length === 0) {
+        // PartyLedgerName filter found nothing — this ledger might not be a party ledger
+        // (e.g. salary payable, expense heads). Fall back to showing ledger master info.
+        try {
+          const masterXml = tdlClient.buildLedgerMasterTdlXml(resolved.name, companyName);
+          const masterResp = await tdlClient.postTally(baseUrl, masterXml);
+          const masterParsed = tdlClient.parseLedgerMasterTdlResponse(masterResp);
+          if (masterParsed.success && masterParsed.data) {
+            const d = masterParsed.data;
+            const { inr } = require('./tdl/formatters');
+            const lines = [
+              `📒 *Ledger: ${resolved.name}*`,
+              `📁 Group: ${d.parent || 'N/A'}`,
+            ];
+            if (d.closingBalance != null) {
+              const bal = d.closingBalance;
+              const drCr = bal >= 0 ? 'Dr' : 'Cr';
+              lines.push(`💰 Closing Balance: ₹${inr(bal)} ${drCr}`);
+            }
+            if (d.gstin) lines.push(`🔢 GSTIN: ${d.gstin}`);
+            if (d.address) lines.push(`📍 ${d.address}`);
+            if (d.phone) lines.push(`📱 ${d.phone}`);
+            if (d.email) lines.push(`📧 ${d.email}`);
+            lines.push('', '_This ledger has no vouchers as party. It may appear as a line item in journal/payment entries._');
+            return { success: true, message: lines.join('\n'), data: masterParsed.data };
+          }
+        } catch (e) { /* master fetch failed, return original empty result */ }
+        return parsed;
+      }
       // Build a transaction type summary line
       const typeCounts = {};
       for (const e of entries) { typeCounts[e.type] = (typeCounts[e.type] || 0) + 1; }
@@ -319,7 +367,7 @@ async function execute(skillId, action, params = {}, skillConfig = {}) {
     try {
       const resolved = await resolvePartyName(partyName, baseUrl, companyName);
       if (resolved.match === 'none') {
-        return { success: false, message: `Party "${partyName}" not found in Tally.` };
+        return await handlePartyNotFound(partyName, baseUrl, companyName);
       }
       if (resolved.match === 'multiple') {
         return { success: true, message: formatSuggestions(resolved.suggestions, partyName), data: { suggestions: resolved.suggestions } };
@@ -343,7 +391,7 @@ async function execute(skillId, action, params = {}, skillConfig = {}) {
     try {
       const resolved = await resolvePartyName(partyName, baseUrl, companyName);
       if (resolved.match === 'none') {
-        return { success: false, message: `Party "${partyName}" not found in Tally.` };
+        return await handlePartyNotFound(partyName, baseUrl, companyName);
       }
       if (resolved.match === 'multiple') {
         return { success: true, message: formatSuggestions(resolved.suggestions, partyName), data: { suggestions: resolved.suggestions } };
@@ -563,7 +611,7 @@ async function execute(skillId, action, params = {}, skillConfig = {}) {
     const page = parseInt(params.page, 10) || 1;
     try {
       const resolved = await resolvePartyName(partyName, baseUrl, companyName);
-      if (resolved.match === 'none') return { success: false, message: `Party "${partyName}" not found in Tally.` };
+      if (resolved.match === 'none') return await handlePartyNotFound(partyName, baseUrl, companyName);
       if (resolved.match === 'multiple') return { success: true, message: formatSuggestions(resolved.suggestions, partyName), data: { suggestions: resolved.suggestions } };
       const xml = tdlClient.buildPartyInvoicesTdlXml(resolved.name, companyName, dateFrom, dateTo, voucherType);
       const responseXml = await tdlClient.postTally(baseUrl, xml);
@@ -635,7 +683,7 @@ async function execute(skillId, action, params = {}, skillConfig = {}) {
     }
     try {
       const resolved = await resolvePartyName(partyName, baseUrl, companyName);
-      if (resolved.match === 'none') return { success: false, message: `Party "${partyName}" not found in Tally.` };
+      if (resolved.match === 'none') return await handlePartyNotFound(partyName, baseUrl, companyName);
       if (resolved.match === 'multiple') return { success: true, message: formatSuggestions(resolved.suggestions, partyName), data: { suggestions: resolved.suggestions } };
       const xml = tdlClient.buildBillOutstandingTdlXml(resolved.name, companyName);
       const responseXml = await tdlClient.postTally(baseUrl, xml);
@@ -955,7 +1003,7 @@ async function execute(skillId, action, params = {}, skillConfig = {}) {
     }
     try {
       const resolved = await resolvePartyName(partyName, baseUrl, companyName);
-      if (resolved.match === 'none') return { success: false, message: `Party "${partyName}" not found in Tally.` };
+      if (resolved.match === 'none') return await handlePartyNotFound(partyName, baseUrl, companyName);
       if (resolved.match === 'multiple') return { success: true, message: formatSuggestions(resolved.suggestions, partyName), data: { suggestions: resolved.suggestions } };
       // Fetch bills for this party
       const billXml = tdlClient.buildBillOutstandingTdlXml(resolved.name, companyName);
@@ -1020,7 +1068,7 @@ async function execute(skillId, action, params = {}, skillConfig = {}) {
     // Resolve party name
     try {
       const resolved = await resolvePartyName(voucherData.party, baseUrl, companyName);
-      if (resolved.match === 'none') return { success: false, message: `Party "${voucherData.party}" not found in Tally. The party ledger must exist in Tally first.` };
+      if (resolved.match === 'none') return await handlePartyNotFound(voucherData.party, baseUrl, companyName);
       if (resolved.match === 'multiple') return { success: true, message: formatSuggestions(resolved.suggestions, voucherData.party), data: { suggestions: resolved.suggestions } };
       voucherData.party = resolved.name;
       // Build and send XML

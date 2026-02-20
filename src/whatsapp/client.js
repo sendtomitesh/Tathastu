@@ -2,6 +2,38 @@ const path = require('path');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 
 /**
+ * After the client is ready, use CDP to throttle CPU so WhatsApp's background
+ * sync doesn't spike to 100%. We only need real-time message events.
+ */
+async function throttleAfterReady(client, log) {
+  try {
+    const page = client.pupPage;
+    if (!page) return;
+    const cdp = await page.target().createCDPSession();
+    // Emulation.setCPUThrottlingRate: rate=4 means CPU runs at 1/4 speed
+    // This dramatically reduces sync CPU usage while still allowing messages through
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+    log('CPU throttle applied (4x slowdown for background sync)');
+    // After 60s, reduce throttle to 2x (sync should be mostly done)
+    setTimeout(async () => {
+      try {
+        await cdp.send('Emulation.setCPUThrottlingRate', { rate: 2 });
+        log('CPU throttle reduced to 2x');
+      } catch (_) { /* page may be closed */ }
+    }, 60000);
+    // After 3 min, remove throttle entirely
+    setTimeout(async () => {
+      try {
+        await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+        log('CPU throttle removed');
+      } catch (_) { /* page may be closed */ }
+    }, 180000);
+  } catch (err) {
+    log('CPU throttle failed (non-critical): ' + (err.message || err));
+  }
+}
+
+/**
  * Create and return a WhatsApp client with LocalAuth (session persisted in dataPath).
  * @param {object} options
  * @param {string} [options.dataPath] - Directory for session (default: .wwebjs_auth)
@@ -60,12 +92,21 @@ function createClient(options = {}) {
   });
   client.on('ready', () => {
     log('Client READY');
+    // Throttle CPU after ready — WhatsApp's background sync hammers the CPU
+    // We only need real-time message events, not full chat sync
+    throttleAfterReady(client, log);
     if (options.onReady) options.onReady();
   });
-  client.on('authenticated', () => log('Authenticated'));
+  client.on('authenticated', () => {
+    log('Authenticated');
+    if (options.onAuthenticated) options.onAuthenticated();
+  });
   client.on('auth_failure', (msg) => log('Auth failure:', msg));
   client.on('disconnected', (reason) => log('Disconnected:', reason));
-  client.on('loading_screen', (percent, msg) => log('Loading:', percent + '%', msg));
+  client.on('loading_screen', (percent, msg) => {
+    log('Loading:', percent + '%', msg);
+    if (options.onLoadingScreen) options.onLoadingScreen(percent, msg);
+  });
   client.on('change_state', (state) => log('State:', state));
 
   if (options.onMessage) {

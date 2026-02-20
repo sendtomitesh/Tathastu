@@ -1,17 +1,108 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TathastuBhav</title>
+  <title>Tathastu</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="container">
-    <h1>TathastuBhav</h1>
-    <p id="status" class="status">Connecting…</p>
-    <div id="qrcode" class="qrcode"></div>
-    <div id="log" class="log"></div>
+  <div class="app">
+    <!-- Sidebar / Brand -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo">
+          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect width="48" height="48" rx="12" fill="url(#grad)"/>
+            <defs><linearGradient id="grad" x1="0" y1="0" x2="48" y2="48"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient></defs>
+            <text x="24" y="32" text-anchor="middle" fill="white" font-size="22" font-weight="700" font-family="system-ui">T</text>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>Tathastu</h1>
+          <span class="tagline">Your AI Accounting Assistant</span>
+        </div>
+      </div>
+      <nav class="nav-links">
+        <a href="#" class="nav-link active" data-view="connect">
+          <span class="nav-icon">🔗</span> Connect
+        </a>
+        <a href="#" class="nav-link" data-view="chat">
+          <span class="nav-icon">💬</span> Conversation
+        </a>
+        <a href="#" class="nav-link" data-view="settings">
+          <span class="nav-icon">⚙️</span> Settings
+        </a>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="version">v1.0.0</div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main">
+      <!-- Connect View -->
+      <div id="view-connect" class="view active">
+        <div class="connect-card">
+          <div class="connect-header">
+            <h2>Connect WhatsApp</h2>
+            <p class="connect-subtitle">Scan the QR code with your WhatsApp to get started</p>
+          </div>
+
+          <div class="status-badge" id="status">
+            <span class="status-dot"></span>
+            <span class="status-text">Connecting…</span>
+          </div>
+
+          <div class="qr-container" id="qrcode">
+            <div class="qr-placeholder">
+              <div class="qr-spinner"></div>
+              <p>Waiting for QR code…</p>
+            </div>
+          </div>
+
+          <div class="connect-steps">
+            <div class="step">
+              <div class="step-num">1</div>
+              <div class="step-text">Open WhatsApp on your phone</div>
+            </div>
+            <div class="step">
+              <div class="step-num">2</div>
+              <div class="step-text">Go to Settings → Linked Devices</div>
+            </div>
+            <div class="step">
+              <div class="step-num">3</div>
+              <div class="step-text">Tap "Link a Device" and scan the code</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Chat View (placeholder) -->
+      <div id="view-chat" class="view">
+        <div class="chat-placeholder">
+          <h2>💬 Conversation</h2>
+          <p>Messages will appear here once connected.</p>
+        </div>
+      </div>
+
+      <!-- Settings View (placeholder) -->
+      <div id="view-settings" class="view">
+        <div class="settings-placeholder">
+          <h2>⚙️ Settings</h2>
+          <p>Configuration options coming soon.</p>
+        </div>
+      </div>
+
+      <!-- Log Bar -->
+      <div class="log-bar">
+        <div class="log-toggle" id="log-toggle">
+          <span>📋 Activity Log</span>
+          <span class="log-arrow">▲</span>
+        </div>
+        <div class="log-content" id="log"></div>
+      </div>
+    </main>
   </div>
   <script src="renderer.js"></script>
 </body>

@@ -253,19 +253,6 @@ async function runTests() {
     assert(statusCalls.length === 0, 'should NOT call checkTallyStatus for start_tally');
   });
 
-  await test('falls back to config companyName when Tally not responding', async () => {
-    const mock = mockTdl();
-    resetCalls(); resetMockResponses();
-    mockResponses.checkTallyStatus = async () => { throw new Error('ECONNREFUSED'); };
-    mockResponses.postTally = async () => SAMPLE_LIST_LEDGERS_XML;
-    const execute = loadExecuteWithMock(mock);
-    const result = await execute('tally', 'list_ledgers', {}, skillConfig);
-    assert(result.success, 'should still succeed with fallback');
-    // The XML should use the config company name as fallback
-    const postCalls = calls.filter(c => c.fn === 'postTally');
-    assert(postCalls[0].xml.includes('SendMe Technologies Pvt Ltd'), 'should fall back to config companyName');
-  });
-
   // ═══════════════════════════════════════════════
   console.log('\nCache Clearing:');
   // ═══════════════════════════════════════════════

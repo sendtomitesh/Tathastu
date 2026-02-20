@@ -10,13 +10,10 @@ function buildLedgerStatementTdlXml(ledgerName, companyName, dateFrom, dateTo, l
   if (dateFrom || dateTo) {
     actualFrom = dateFrom;
     actualTo = dateTo || dateFrom;
-  } else {
-    const now = new Date();
-    actualFrom = now.getMonth() >= 3 ? `${now.getFullYear()}0401` : `${now.getFullYear() - 1}0401`;
-    actualTo = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+    svParts.push(`<SVFROMDATE>${escapeXml(actualFrom)}</SVFROMDATE>`);
+    svParts.push(`<SVTODATE>${escapeXml(actualTo)}</SVTODATE>`);
   }
-  svParts.push(`<SVFROMDATE>${escapeXml(actualFrom)}</SVFROMDATE>`);
-  svParts.push(`<SVTODATE>${escapeXml(actualTo)}</SVTODATE>`);
+  // When no dates given, don't set SVFROMDATE/SVTODATE — Tally uses the company's own period
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <ENVELOPE>

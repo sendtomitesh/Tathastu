@@ -5,7 +5,6 @@
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
-const messageStore = require('./messageStore');
 
 const PORT = process.env.MPBOT_UI_PORT || 3750;
 const CONFIG_PATH = process.env.CONFIG_PATH || path.join(process.cwd(), 'config', 'skills.json');
@@ -39,10 +38,9 @@ let state = {
   statusText: 'Starting…',
   qrDataUrl: null,
   log: [],
-  messages: [], // Conversation messages (self-chat only)
 };
 
-// Multi-tenant state: tenants[id] = { name, status, statusText, qrDataUrl, log, messages }
+// Multi-tenant state: tenants[id] = { name, status, statusText, qrDataUrl, log }
 let tenantsState = {};
 
 function setStatus(status, statusText) {
@@ -69,7 +67,6 @@ function initTenants(tenantList) {
       statusText: 'Starting…',
       qrDataUrl: null,
       log: [],
-      messages: [],
     };
   }
 }
@@ -98,36 +95,6 @@ function addTenantLog(tenantId, text) {
   }
 }
 
-function addMessage(message) {
-  state.messages.push(message);
-  if (state.messages.length > 500) state.messages.shift();
-  try {
-    messageStore.append(messageStore.DEFAULT_TENANT_ID, message);
-  } catch (err) {
-    console.error('[messageStore] append failed:', err.message);
-  }
-}
-
-function addTenantMessage(tenantId, message) {
-  if (tenantsState[tenantId]) {
-    if (!tenantsState[tenantId].messages) tenantsState[tenantId].messages = [];
-    tenantsState[tenantId].messages.push(message);
-    if (tenantsState[tenantId].messages.length > 500) tenantsState[tenantId].messages.shift();
-    try {
-      messageStore.append(tenantId, message);
-    } catch (err) {
-      console.error('[messageStore] append failed:', err.message);
-    }
-  }
-}
-
-function getMessages(tenantId = null) {
-  if (tenantId && tenantsState[tenantId]) {
-    return tenantsState[tenantId].messages || [];
-  }
-  return state.messages || [];
-}
-
 function getApiStatus() {
   if (state.mode === 'multi') {
     return {
@@ -152,116 +119,269 @@ function getApiStatus() {
 }
 
 const SINGLE_HTML = `<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TathastuBhav</title>
+  <title>Tathastu — WhatsApp Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    * { box-sizing: border-box; }
-    body { font-family: system-ui, sans-serif; margin: 0; padding: 20px; background: #1a1a2e; color: #eee; min-height: 100vh; }
-    .container { max-width: 360px; margin: 0 auto; }
-    h1 { font-size: 1.25rem; margin: 0 0 12px 0; }
-    .status { font-size: 0.9rem; color: #aaa; margin-bottom: 16px; }
-    .status.ready { color: #4ade80; }
-    .status.error { color: #f87171; }
-    .qrcode { text-align: center; margin: 16px 0; min-height: 260px; }
-    .qrcode img { max-width: 260px; background: #fff; padding: 12px; border-radius: 8px; }
-    .log { font-size: 0.85rem; color: #888; max-height: 400px; overflow-y: auto; border-top: 1px solid #333; padding-top: 12px; padding-bottom: 8px; background: rgba(0,0,0,0.2); border-radius: 6px; padding-left: 12px; padding-right: 12px; margin-top: 12px; }
-    .log div { margin-bottom: 6px; line-height: 1.4; }
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Inter',system-ui,sans-serif;min-height:100vh;background:#06060e;color:#e2e8f0;overflow-x:hidden}
+    .bg{position:fixed;inset:0;z-index:0;overflow:hidden}
+    .bg .orb{position:absolute;border-radius:50%;filter:blur(80px);opacity:.35;animation:float 12s ease-in-out infinite}
+    .bg .orb.o1{width:420px;height:420px;background:radial-gradient(circle,#6366f1,#4f46e5);top:-80px;left:-100px;animation-delay:0s}
+    .bg .orb.o2{width:350px;height:350px;background:radial-gradient(circle,#8b5cf6,#7c3aed);bottom:-60px;right:-80px;animation-delay:-4s}
+    .bg .orb.o3{width:250px;height:250px;background:radial-gradient(circle,#06b6d4,#0891b2);top:40%;left:60%;animation-delay:-8s}
+    @keyframes float{0%,100%{transform:translateY(0) scale(1)}50%{transform:translateY(-30px) scale(1.05)}}
+    .bg .grid-overlay{position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.02) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.02) 1px,transparent 1px);background-size:60px 60px}
+    .page{position:relative;z-index:1;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:40px 20px 60px}
+    .nav-bar{width:100%;max-width:800px;display:flex;align-items:center;justify-content:space-between;margin-bottom:48px}
+    .logo{display:flex;align-items:center;gap:12px;text-decoration:none}
+    .logo svg{width:36px;height:36px}
+    .logo span{font-size:1.35rem;font-weight:700;background:linear-gradient(135deg,#c7d2fe,#818cf8);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+    .nav-links{display:flex;gap:8px}
+    .nav-links a,.nav-links button{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);color:#94a3b8;padding:8px 16px;border-radius:10px;font-size:.82rem;text-decoration:none;cursor:pointer;transition:all .2s;font-family:inherit}
+    .nav-links a:hover,.nav-links button:hover{background:rgba(255,255,255,.1);color:#e2e8f0}
+    .nav-links button.danger{color:#f87171;border-color:rgba(248,113,113,.2)}
+    .nav-links button.danger:hover{background:rgba(248,113,113,.1)}
+    .hero{text-align:center;margin-bottom:40px}
+    .hero h1{font-size:2.2rem;font-weight:700;line-height:1.2;margin-bottom:12px;background:linear-gradient(135deg,#f1f5f9 0%,#94a3b8 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+    .hero p{color:#64748b;font-size:1rem;max-width:420px;margin:0 auto;line-height:1.6}
+    .status-pill{display:inline-flex;align-items:center;gap:8px;padding:8px 20px;border-radius:50px;font-size:.85rem;font-weight:500;margin-bottom:32px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04);backdrop-filter:blur(10px);transition:all .4s}
+    .status-pill .dot{width:8px;height:8px;border-radius:50%;background:#64748b;transition:background .4s}
+    .status-pill.ready{border-color:rgba(74,222,128,.25);background:rgba(74,222,128,.06)}
+    .status-pill.ready .dot{background:#4ade80;box-shadow:0 0 8px rgba(74,222,128,.5)}
+    .status-pill.error{border-color:rgba(248,113,113,.25);background:rgba(248,113,113,.06)}
+    .status-pill.error .dot{background:#f87171;box-shadow:0 0 8px rgba(248,113,113,.5)}
+    .status-pill.qr{border-color:rgba(129,140,248,.25);background:rgba(129,140,248,.06)}
+    .status-pill.qr .dot{background:#818cf8;box-shadow:0 0 8px rgba(129,140,248,.5);animation:pulse 1.5s ease-in-out infinite}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+    .main-card{background:rgba(255,255,255,.04);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,.08);border-radius:24px;padding:40px;max-width:440px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+    .qr-area{min-height:280px;display:flex;align-items:center;justify-content:center;margin-bottom:24px;position:relative}
+    .qr-area img{max-width:280px;width:100%;background:#fff;padding:16px;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.2)}
+    .qr-placeholder{display:flex;flex-direction:column;align-items:center;gap:16px;color:#475569}
+    .qr-placeholder .spinner{width:48px;height:48px;border:3px solid rgba(129,140,248,.15);border-top-color:#818cf8;border-radius:50%;animation:spin 1s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .qr-placeholder span{font-size:.9rem}
+    .connected-badge{display:flex;flex-direction:column;align-items:center;gap:12px;color:#4ade80}
+    .connected-badge svg{width:56px;height:56px;animation:scaleIn .4s ease}
+    @keyframes scaleIn{from{transform:scale(0);opacity:0}to{transform:scale(1);opacity:1}}
+    .connected-badge span{font-size:1rem;font-weight:600}
+    .steps{display:flex;flex-direction:column;gap:12px}
+    .step{display:flex;align-items:flex-start;gap:14px;padding:12px 16px;border-radius:14px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);transition:all .2s}
+    .step:hover{background:rgba(255,255,255,.06)}
+    .step-num{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,#6366f1,#8b5cf6);display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:700;color:#fff;flex-shrink:0}
+    .step-text{font-size:.88rem;color:#94a3b8;line-height:1.5}
+    .step-text strong{color:#e2e8f0;font-weight:600}
+    .log-section{max-width:440px;width:100%;margin-top:32px}
+    .log-toggle{width:100%;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06);color:#64748b;padding:10px 16px;border-radius:12px;font-size:.82rem;cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:space-between;transition:all .2s}
+    .log-toggle:hover{background:rgba(255,255,255,.06);color:#94a3b8}
+    .log-toggle .arrow{transition:transform .2s}
+    .log-toggle.open .arrow{transform:rotate(180deg)}
+    .log-box{max-height:0;overflow:hidden;transition:max-height .3s ease}
+    .log-box.open{max-height:400px}
+    .log-inner{padding:12px 16px;font-size:.8rem;color:#475569;background:rgba(0,0,0,.2);border-radius:0 0 12px 12px;border:1px solid rgba(255,255,255,.04);border-top:0;max-height:300px;overflow-y:auto;font-family:'SF Mono',Monaco,Consolas,monospace}
+    .log-inner div{margin-bottom:4px;line-height:1.5}
+    .log-inner .time{color:#6366f1;margin-right:8px}
+    .footer{margin-top:48px;text-align:center;color:#334155;font-size:.78rem}
+    .footer a{color:#4f46e5;text-decoration:none}
+    @media(max-width:480px){.page{padding:24px 16px 40px}.hero h1{font-size:1.6rem}.main-card{padding:28px 20px}.nav-bar{flex-direction:column;gap:16px}.nav-links{flex-wrap:wrap;justify-content:center}}
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>TathastuBhav</h1>
-    <p id="status" class="status">Connecting…</p>
-    <div style="margin-bottom:12px;"><a href="/chat" style="color:#60a5fa;text-decoration:none;font-size:0.85rem;">💬 View Conversation</a> | <a href="/admin" style="color:#60a5fa;text-decoration:none;font-size:0.85rem;">⚙️ Admin</a> | <button id="resetBtn" onclick="resetSession()" style="background:none;border:none;color:#f87171;cursor:pointer;font-size:0.85rem;padding:0;">🔄 Reset Session</button></div>
-    <div id="qrcode" class="qrcode"></div>
-    <div id="log" class="log"></div>
+  <div class="bg"><div class="orb o1"></div><div class="orb o2"></div><div class="orb o3"></div><div class="grid-overlay"></div></div>
+  <div class="page">
+    <nav class="nav-bar">
+      <a href="/" class="logo">
+        <svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect width="36" height="36" rx="10" fill="url(#lg)"/>
+          <path d="M10 18.5L14.5 23L26 13" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+          <defs><linearGradient id="lg" x1="0" y1="0" x2="36" y2="36"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient></defs>
+        </svg>
+        <span>Tathastu</span>
+      </a>
+      <div class="nav-links">
+        <a href="/admin">⚙️ Admin</a>
+        <button class="danger" id="resetBtn" onclick="resetSession()">↻ Reset</button>
+      </div>
+    </nav>
+
+    <div class="hero">
+      <h1>Your Tally on WhatsApp</h1>
+      <p>Connect your WhatsApp to access Tally data — vouchers, ledgers, reports and more — right from your chat.</p>
+    </div>
+
+    <div id="statusPill" class="status-pill">
+      <span class="dot"></span>
+      <span id="statusText">Connecting…</span>
+    </div>
+
+    <div class="main-card">
+      <div id="qrcode" class="qr-area">
+        <div class="qr-placeholder">
+          <div class="spinner"></div>
+          <span>Waiting for QR code…</span>
+        </div>
+      </div>
+      <div class="steps">
+        <div class="step"><div class="step-num">1</div><div class="step-text">Open <strong>WhatsApp</strong> on your phone</div></div>
+        <div class="step"><div class="step-num">2</div><div class="step-text">Go to <strong>Settings → Linked Devices</strong></div></div>
+        <div class="step"><div class="step-num">3</div><div class="step-text">Tap <strong>Link a Device</strong> and scan the QR code above</div></div>
+      </div>
+    </div>
+
+    <div class="log-section">
+      <button class="log-toggle" id="logToggle" onclick="toggleLog()">
+        <span>Activity Log</span>
+        <span class="arrow">▼</span>
+      </button>
+      <div class="log-box" id="logBox">
+        <div class="log-inner" id="log"></div>
+      </div>
+    </div>
+
+    <div class="footer">Powered by <a href="#">Tathastu</a> — Tally + WhatsApp</div>
   </div>
   <script>
-    function resetSession() {
-      if (!confirm('This will clear the WhatsApp session and show a new QR code. Continue?')) return;
-      var btn = document.getElementById('resetBtn');
-      btn.disabled = true;
-      btn.textContent = 'Resetting…';
-      document.getElementById('status').textContent = 'Resetting session…';
-      fetch('/api/reset-session', { method: 'POST' })
-        .then(function(r) { return r.json(); })
-        .then(function(d) {
-          btn.disabled = false;
-          btn.textContent = '🔄 Reset Session';
-          if (d.error) { alert('Reset failed: ' + d.error); }
-        })
-        .catch(function(e) {
-          btn.disabled = false;
-          btn.textContent = '🔄 Reset Session';
-          alert('Reset failed: ' + e);
-        });
+    function toggleLog(){
+      document.getElementById('logToggle').classList.toggle('open');
+      document.getElementById('logBox').classList.toggle('open');
     }
-    function poll() {
-      fetch('/api/status').then(r => r.json()).then(d => {
-        if (d.mode !== 'single') return;
-        document.getElementById('status').textContent = d.statusText;
-        document.getElementById('status').className = 'status ' + (d.status === 'ready' ? 'ready' : d.status === 'error' ? 'error' : '');
-        var qr = document.getElementById('qrcode');
-        if (d.qrDataUrl) qr.innerHTML = '<img src="' + d.qrDataUrl + '" alt="Scan with WhatsApp">';
-        else qr.innerHTML = '';
-        var logEl = document.getElementById('log');
-        if (d.log && d.log.length) {
-          logEl.innerHTML = d.log.map(function (e) { return '<div>' + new Date(e.t).toLocaleTimeString() + ' ' + e.text + '</div>'; }).join('');
-          logEl.scrollTop = logEl.scrollHeight;
+    function resetSession(){
+      if(!confirm('This will clear the WhatsApp session and show a new QR code. Continue?'))return;
+      var btn=document.getElementById('resetBtn');
+      btn.disabled=true;btn.textContent='Resetting…';
+      document.getElementById('statusText').textContent='Resetting session…';
+      fetch('/api/reset-session',{method:'POST'}).then(function(r){return r.json()}).then(function(d){
+        btn.disabled=false;btn.textContent='↻ Reset';
+        if(d.error)alert('Reset failed: '+d.error);
+      }).catch(function(e){btn.disabled=false;btn.textContent='↻ Reset';alert('Reset failed: '+e)});
+    }
+    function poll(){
+      fetch('/api/status').then(function(r){return r.json()}).then(function(d){
+        if(d.mode!=='single')return;
+        document.getElementById('statusText').textContent=d.statusText;
+        var pill=document.getElementById('statusPill');
+        pill.className='status-pill'+(d.status==='ready'?' ready':d.status==='error'?' error':d.qrDataUrl?' qr':'');
+        var qr=document.getElementById('qrcode');
+        if(d.status==='ready'){
+          qr.innerHTML='<div class="connected-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg><span>Connected</span></div>';
+        }else if(d.qrDataUrl){
+          qr.innerHTML='<img src="'+d.qrDataUrl+'" alt="Scan with WhatsApp">';
+        }else{
+          qr.innerHTML='<div class="qr-placeholder"><div class="spinner"></div><span>Waiting for QR code…</span></div>';
         }
-      }).catch(function () {});
+        var logEl=document.getElementById('log');
+        if(d.log&&d.log.length){
+          logEl.innerHTML=d.log.map(function(e){return '<div><span class="time">'+new Date(e.t).toLocaleTimeString()+'</span>'+e.text+'</div>'}).join('');
+          logEl.scrollTop=logEl.scrollHeight;
+        }
+      }).catch(function(){});
     }
-    setInterval(poll, 1500);
-    poll();
+    setInterval(poll,1500);poll();
   </script>
 </body>
 </html>`;
 
 const MULTI_HTML = `<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TathastuBhav – Register WhatsApp</title>
+  <title>Tathastu — Register WhatsApp</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    * { box-sizing: border-box; }
-    body { font-family: system-ui, sans-serif; margin: 0; padding: 20px; background: #1a1a2e; color: #eee; min-height: 100vh; }
-    h1 { font-size: 1.25rem; margin: 0 0 16px 0; }
-    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; max-width: 900px; }
-    .card { background: #16213e; border-radius: 12px; padding: 16px; border: 1px solid #333; }
-    .card h2 { font-size: 1rem; margin: 0 0 12px 0; color: #e0e0e0; }
-    .card .status { font-size: 0.85rem; color: #aaa; margin-bottom: 12px; }
-    .card .status.ready { color: #4ade80; }
-    .card .status.error { color: #f87171; }
-    .card .qrcode { text-align: center; margin: 12px 0; min-height: 220px; }
-    .card .qrcode img { max-width: 220px; background: #fff; padding: 10px; border-radius: 8px; }
-    .card .log { font-size: 0.8rem; color: #888; max-height: 250px; overflow-y: auto; border-top: 1px solid #333; padding-top: 12px; padding-bottom: 8px; margin-top: 12px; background: rgba(0,0,0,0.2); border-radius: 6px; padding-left: 12px; padding-right: 12px; }
-    .card .log div { margin-bottom: 4px; line-height: 1.4; }
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Inter',system-ui,sans-serif;min-height:100vh;background:#06060e;color:#e2e8f0;overflow-x:hidden}
+    .bg{position:fixed;inset:0;z-index:0;overflow:hidden}
+    .bg .orb{position:absolute;border-radius:50%;filter:blur(80px);opacity:.35;animation:float 12s ease-in-out infinite}
+    .bg .orb.o1{width:420px;height:420px;background:radial-gradient(circle,#6366f1,#4f46e5);top:-80px;left:-100px;animation-delay:0s}
+    .bg .orb.o2{width:350px;height:350px;background:radial-gradient(circle,#8b5cf6,#7c3aed);bottom:-60px;right:-80px;animation-delay:-4s}
+    .bg .orb.o3{width:250px;height:250px;background:radial-gradient(circle,#06b6d4,#0891b2);top:40%;left:60%;animation-delay:-8s}
+    @keyframes float{0%,100%{transform:translateY(0) scale(1)}50%{transform:translateY(-30px) scale(1.05)}}
+    .bg .grid-overlay{position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.02) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.02) 1px,transparent 1px);background-size:60px 60px}
+    .page{position:relative;z-index:1;min-height:100vh;padding:40px 20px 60px}
+    .nav-bar{max-width:1100px;margin:0 auto 40px;display:flex;align-items:center;justify-content:space-between}
+    .logo{display:flex;align-items:center;gap:12px;text-decoration:none}
+    .logo svg{width:36px;height:36px}
+    .logo span{font-size:1.35rem;font-weight:700;background:linear-gradient(135deg,#c7d2fe,#818cf8);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+    .nav-links{display:flex;gap:8px}
+    .nav-links a{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);color:#94a3b8;padding:8px 16px;border-radius:10px;font-size:.82rem;text-decoration:none;transition:all .2s}
+    .nav-links a:hover{background:rgba(255,255,255,.1);color:#e2e8f0}
+    .hero{text-align:center;max-width:600px;margin:0 auto 40px}
+    .hero h1{font-size:2rem;font-weight:700;margin-bottom:10px;background:linear-gradient(135deg,#f1f5f9,#94a3b8);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+    .hero p{color:#64748b;font-size:.95rem;line-height:1.6}
+    .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:24px;max-width:1100px;margin:0 auto}
+    .card{background:rgba(255,255,255,.04);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,.08);border-radius:20px;padding:28px;box-shadow:0 12px 40px rgba(0,0,0,.25);transition:transform .2s,box-shadow .2s}
+    .card:hover{transform:translateY(-2px);box-shadow:0 16px 50px rgba(0,0,0,.35)}
+    .card-header{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+    .card-avatar{width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#6366f1,#8b5cf6);display:flex;align-items:center;justify-content:center;font-size:1rem;font-weight:700;color:#fff}
+    .card-name{font-size:1.05rem;font-weight:600;color:#e2e8f0}
+    .card-status{font-size:.82rem;padding:4px 12px;border-radius:50px;display:inline-flex;align-items:center;gap:6px;margin-bottom:16px;border:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.03)}
+    .card-status .dot{width:6px;height:6px;border-radius:50%;background:#64748b}
+    .card-status.ready{border-color:rgba(74,222,128,.2);color:#4ade80}
+    .card-status.ready .dot{background:#4ade80;box-shadow:0 0 6px rgba(74,222,128,.5)}
+    .card-status.error{border-color:rgba(248,113,113,.2);color:#f87171}
+    .card-status.error .dot{background:#f87171}
+    .card-status.qr{border-color:rgba(129,140,248,.2);color:#818cf8}
+    .card-status.qr .dot{background:#818cf8;animation:pulse 1.5s ease-in-out infinite}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+    .card .qr-area{min-height:220px;display:flex;align-items:center;justify-content:center;margin-bottom:12px}
+    .card .qr-area img{max-width:220px;width:100%;background:#fff;padding:12px;border-radius:14px;box-shadow:0 6px 24px rgba(0,0,0,.2)}
+    .card .qr-placeholder{display:flex;flex-direction:column;align-items:center;gap:12px;color:#475569}
+    .card .qr-placeholder .spinner{width:40px;height:40px;border:3px solid rgba(129,140,248,.15);border-top-color:#818cf8;border-radius:50%;animation:spin 1s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .card .qr-placeholder span{font-size:.85rem}
+    .card .log{font-size:.78rem;color:#475569;max-height:180px;overflow-y:auto;border-top:1px solid rgba(255,255,255,.05);padding-top:10px;margin-top:12px;font-family:'SF Mono',Monaco,Consolas,monospace}
+    .card .log div{margin-bottom:3px;line-height:1.4}
+    .card .log .time{color:#6366f1;margin-right:6px}
+    .footer{margin-top:48px;text-align:center;color:#334155;font-size:.78rem}
+    .footer a{color:#4f46e5;text-decoration:none}
+    @media(max-width:480px){.page{padding:24px 16px 40px}.hero h1{font-size:1.5rem}.cards{grid-template-columns:1fr}.nav-bar{flex-direction:column;gap:16px}}
   </style>
 </head>
 <body>
-  <h1>Register your WhatsApp</h1>
-  <p style="color:#888;font-size:0.9rem;margin-bottom:20px;">Find your name below and scan the QR with WhatsApp (Linked devices → Link a device).</p>
-  <div style="margin-bottom:20px;"><a href="/chat" style="color:#60a5fa;text-decoration:none;font-size:0.9rem;">💬 View Conversation</a> | <a href="/admin" style="color:#60a5fa;text-decoration:none;font-size:0.9rem;">⚙️ Admin</a></div>
-  <div id="cards" class="cards"></div>
+  <div class="bg"><div class="orb o1"></div><div class="orb o2"></div><div class="orb o3"></div><div class="grid-overlay"></div></div>
+  <div class="page">
+    <nav class="nav-bar">
+      <a href="/" class="logo">
+        <svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect width="36" height="36" rx="10" fill="url(#lg)"/>
+          <path d="M10 18.5L14.5 23L26 13" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+          <defs><linearGradient id="lg" x1="0" y1="0" x2="36" y2="36"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient></defs>
+        </svg>
+        <span>Tathastu</span>
+      </a>
+      <div class="nav-links">
+        <a href="/admin">⚙️ Admin</a>
+      </div>
+    </nav>
+    <div class="hero">
+      <h1>Register Your WhatsApp</h1>
+      <p>Find your name below and scan the QR code with WhatsApp → Settings → Linked Devices → Link a Device</p>
+    </div>
+    <div id="cards" class="cards"></div>
+    <div class="footer">Powered by <a href="#">Tathastu</a> — Tally + WhatsApp</div>
+  </div>
   <script>
-    function poll() {
-      fetch('/api/status').then(r => r.json()).then(d => {
-        if (d.mode !== 'multi' || !d.tenants) return;
-        var html = '';
-        d.tenants.forEach(function(t) {
-          var qrHtml = t.qrDataUrl ? '<img src="' + t.qrDataUrl + '" alt="Scan with WhatsApp">' : '<span style="color:#666">Waiting for QR…</span>';
-          var logHtml = (t.log && t.log.length) ? t.log.map(function(e) { return '<div>' + new Date(e.t).toLocaleTimeString() + ' ' + e.text + '</div>'; }).join('') : '';
-          html += '<div class="card" data-id="' + t.id + '"><h2>' + t.name + '</h2><p class="status ' + (t.status === 'ready' ? 'ready' : t.status === 'error' ? 'error' : '') + '">' + t.statusText + '</p><div class="qrcode">' + qrHtml + '</div><div class="log">' + logHtml + '</div></div>';
+    function poll(){
+      fetch('/api/status').then(function(r){return r.json()}).then(function(d){
+        if(d.mode!=='multi'||!d.tenants)return;
+        var html='';
+        d.tenants.forEach(function(t){
+          var initials=t.name.split(' ').map(function(w){return w[0]}).join('').substring(0,2).toUpperCase();
+          var statusCls=t.status==='ready'?'ready':t.status==='error'?'error':t.qrDataUrl?'qr':'';
+          var qrHtml=t.status==='ready'?'<div style="display:flex;flex-direction:column;align-items:center;gap:10px;color:#4ade80"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg><span style="font-weight:600">Connected</span></div>':t.qrDataUrl?'<img src="'+t.qrDataUrl+'" alt="Scan QR">':'<div class="qr-placeholder"><div class="spinner"></div><span>Waiting for QR…</span></div>';
+          var logHtml=(t.log&&t.log.length)?t.log.map(function(e){return '<div><span class="time">'+new Date(e.t).toLocaleTimeString()+'</span>'+e.text+'</div>'}).join(''):'';
+          html+='<div class="card"><div class="card-header"><div class="card-avatar">'+initials+'</div><div class="card-name">'+t.name+'</div></div><div class="card-status '+statusCls+'"><span class="dot"></span>'+t.statusText+'</div><div class="qr-area">'+qrHtml+'</div>'+(logHtml?'<div class="log">'+logHtml+'</div>':'')+'</div>';
         });
-        document.getElementById('cards').innerHTML = html;
-      }).catch(function () {});
+        document.getElementById('cards').innerHTML=html;
+      }).catch(function(){});
     }
-    setInterval(poll, 1500);
-    poll();
+    setInterval(poll,1500);poll();
   </script>
 </body>
 </html>`;
@@ -272,7 +392,7 @@ function getAdminHtml() {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TathastuBhav – Admin</title>
+  <title>Tathastu — Admin</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: #e2e8f0; min-height: 100vh; padding: 0; }
@@ -563,141 +683,6 @@ function getAdminHtml() {
 </html>`;
 }
 
-function getChatHtml() {
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TathastuBhav – Conversation</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: #e2e8f0; min-height: 100vh; display: flex; flex-direction: column; }
-    .header { background: rgba(30, 41, 59, 0.9); backdrop-filter: blur(10px); border-bottom: 1px solid rgba(148, 163, 184, 0.1); padding: 16px 24px; }
-    .header h1 { font-size: 1.5rem; font-weight: 600; color: #f1f5f9; margin-bottom: 4px; }
-    .header .nav { margin-top: 8px; }
-    .header a { color: #60a5fa; text-decoration: none; font-size: 0.9rem; }
-    .header a:hover { color: #93c5fd; }
-    .chat-container { flex: 1; display: flex; flex-direction: column; max-width: 900px; margin: 0 auto; width: 100%; padding: 20px; overflow: hidden; }
-    .messages { flex: 1; overflow-y: auto; padding: 20px 0; }
-    .message { display: flex; margin-bottom: 16px; animation: fadeIn 0.3s ease-in; }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-    .message.user { justify-content: flex-end; }
-    .message.bot { justify-content: flex-start; }
-    .message-bubble { max-width: 70%; padding: 12px 16px; border-radius: 18px; word-wrap: break-word; position: relative; }
-    .message.user .message-bubble { background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: white; border-bottom-right-radius: 4px; }
-    .message.bot .message-bubble { background: rgba(30, 41, 59, 0.8); color: #e2e8f0; border-bottom-left-radius: 4px; border: 1px solid rgba(148, 163, 184, 0.2); }
-    .message-meta { font-size: 0.75rem; color: #94a3b8; margin-top: 4px; display: flex; align-items: center; gap: 8px; }
-    .message.user .message-meta { justify-content: flex-end; }
-    .message-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: 500; }
-    .badge-audio { background: rgba(96, 165, 250, 0.2); color: #93c5fd; }
-    .badge-lang { background: rgba(34, 197, 94, 0.2); color: #86efac; }
-    .empty-state { text-align: center; padding: 60px 20px; color: #94a3b8; }
-    .empty-state svg { width: 64px; height: 64px; margin-bottom: 16px; opacity: 0.5; }
-    .empty-state h2 { font-size: 1.2rem; margin-bottom: 8px; color: #cbd5e1; }
-    .empty-state p { font-size: 0.9rem; }
-    ::-webkit-scrollbar { width: 8px; }
-    ::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.5); }
-    ::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.3); border-radius: 4px; }
-    ::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.5); }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <h1>💬 Conversation History</h1>
-    <p style="color:#94a3b8;font-size:0.85rem;margin-top:4px;">Your self-chat messages with the bot</p>
-    <div class="nav"><a href="/">← Back to Dashboard</a> | <a href="/admin">⚙️ Admin</a></div>
-  </div>
-  <div class="chat-container">
-    <div id="messages" class="messages">
-      <div class="empty-state">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-        </svg>
-        <h2>No messages yet</h2>
-        <p>Start chatting with the bot in Saved Messages to see your conversation here.</p>
-      </div>
-    </div>
-  </div>
-  <script>
-    let lastMessageCount = 0;
-    let renderedMessageIds = new Set();
-    
-    function formatTime(timestamp) {
-      const date = new Date(timestamp);
-      const now = new Date();
-      const diff = now - date;
-      if (diff < 60000) return 'Just now';
-      if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
-      if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
-      return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    }
-    function renderMessage(msg) {
-      const isUser = msg.type === 'user';
-      const badges = [];
-      if (msg.isAudio) badges.push('<span class="message-badge badge-audio">🎤 Audio</span>');
-      if (msg.originalLang) badges.push('<span class="message-badge badge-lang">' + msg.originalLang + '</span>');
-      return '<div class="message ' + (isUser ? 'user' : 'bot') + '" data-id="' + escapeHtml(msg.id) + '"><div class="message-bubble">' + 
-        escapeHtml(msg.text) + 
-        '<div class="message-meta">' + formatTime(msg.timestamp) + (badges.length ? ' ' + badges.join(' ') : '') + '</div>' +
-        '</div></div>';
-    }
-    function renderMessages(messages) {
-      const container = document.getElementById('messages');
-      if (!messages || messages.length === 0) {
-        if (container.querySelector('.empty-state')) return; // Already showing empty state
-        container.innerHTML = '<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><h2>No messages yet</h2><p>Start chatting with the bot in Saved Messages to see your conversation here.</p></div>';
-        return;
-      }
-      
-      // Remove empty state if messages exist
-      const emptyState = container.querySelector('.empty-state');
-      if (emptyState) emptyState.remove();
-      
-      // Only update if message count changed or new messages detected
-      if (messages.length !== lastMessageCount) {
-        // Check for new messages
-        const newMessages = messages.filter(function(msg) { return !renderedMessageIds.has(msg.id); });
-        
-        if (newMessages.length > 0) {
-          // Append only new messages
-          newMessages.forEach(function(msg) {
-            container.insertAdjacentHTML('beforeend', renderMessage(msg));
-            renderedMessageIds.add(msg.id);
-          });
-          container.scrollTop = container.scrollHeight;
-        } else if (messages.length < lastMessageCount) {
-          // Messages were cleared or reduced, re-render all
-          container.innerHTML = messages.map(renderMessage).join('');
-          renderedMessageIds = new Set(messages.map(function(m) { return m.id; }));
-          container.scrollTop = container.scrollHeight;
-        }
-        
-        lastMessageCount = messages.length;
-      }
-    }
-    function escapeHtml(text) {
-      const div = document.createElement('div');
-      div.textContent = text;
-      return div.innerHTML.replace(/\\n/g, '<br>');
-    }
-    function loadMessages() {
-      const urlParams = new URLSearchParams(window.location.search);
-      const tenantId = urlParams.get('tenantId');
-      const url = '/api/messages' + (tenantId ? '?tenantId=' + encodeURIComponent(tenantId) : '');
-      fetch(url).then(function(r) { return r.json(); }).then(function(data) {
-        renderMessages(data.messages || []);
-      }).catch(function(e) {
-        console.error('Failed to load messages:', e);
-      });
-    }
-    loadMessages();
-    setInterval(loadMessages, 2000); // Refresh every 2 seconds
-  </script>
-</body>
-</html>`;
-}
-
 const server = http.createServer((req, res) => {
   const url = req.url || '/';
   if (url === '/' || url === '/index.html') {
@@ -748,19 +733,6 @@ const server = http.createServer((req, res) => {
     res.end(getAdminHtml());
     return;
   }
-  if (url === '/chat' || url === '/chat/') {
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end(getChatHtml());
-    return;
-  }
-  if (url.startsWith('/api/messages')) {
-    const urlObj = new URL(url, 'http://localhost');
-    const tenantId = urlObj.searchParams.get('tenantId');
-    const messages = getMessages(tenantId);
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ messages }));
-    return;
-  }
   if (url === '/api/reset-session' && req.method === 'POST') {
     if (!onResetSession) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -789,20 +761,11 @@ function start(options = {}) {
   if (tenantList.length > 0) {
     initTenants(tenantList);
   }
-  messageStore.init();
-  if (state.mode === 'multi') {
-    for (const tenantId of Object.keys(tenantsState)) {
-      tenantsState[tenantId].messages = messageStore.loadForTenant(tenantId);
-    }
-  } else {
-    state.messages = messageStore.loadForTenant(messageStore.DEFAULT_TENANT_ID);
-  }
   return new Promise((resolve) => {
     server.listen(PORT, '127.0.0.1', () => {
       const url = `http://127.0.0.1:${PORT}`;
-      console.log('TathastuBhav UI: open in your browser →', url);
+      console.log('Tathastu UI: open in your browser →', url);
       console.log('Config UI: ' + url + '/admin');
-      console.log('Conversation UI: ' + url + '/chat');
       resolve({
         url,
         setStatus,
@@ -811,8 +774,6 @@ function start(options = {}) {
         setTenantStatus,
         setTenantQr,
         addTenantLog,
-        addMessage,
-        addTenantMessage,
         setResetHandler,
         openBrowser: () => openBrowser(url),
       });
@@ -825,5 +786,5 @@ function openBrowser(url) {
   require('child_process').exec(start + ' "' + url + '"', () => {});
 }
 
-module.exports = { start, openBrowser, setStatus, setQr, addLog, setTenantStatus, setTenantQr, addTenantLog, initTenants, addMessage, addTenantMessage, getMessages, setResetHandler };
+module.exports = { start, openBrowser, setStatus, setQr, addLog, setTenantStatus, setTenantQr, addTenantLog, initTenants, setResetHandler };
 module.exports.state = state;

@@ -206,13 +206,23 @@ function parseWithKeyword(userMessage, config) {
   // --- Party-specific actions (need party name extraction) ---
 
   // get_ledger: "ledger of X", "statement of X", "ledger for X", "transactions for X", "check party X"
+  // Stop capturing party name at date-related words so "ledger for dhrupal for 2025" falls through to OpenAI
+  const DATE_STOP = /\s+(?:for|from|in|since|during|between|this|last|next|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december|20\d{2}|yesterday|today|week|month|quarter|year)\b/i;
   const ledgerMatch = text.match(/(?:get\s+)?(?:ledger|statement|transactions?)\s+(?:of|for)\s+(.+?)(?:\s*\.|$)/i)
     || text.match(/ledger\s+(.+?)(?:\s*\.|$)/i)
     || text.match(/(?:check|search|find|show)\s+(?:for\s+)?(?:party(?:\s+name)?(?:\s+like)?)\s+(.+?)(?:\s+and\b.*|$)/i)
     || text.match(/(?:party|account)\s+(?:details?|info|summary)\s+(?:of|for)\s+(.+?)(?:\s*\.|$)/i);
   if (ledgerMatch) {
-    const party = ledgerMatch[1].trim().replace(/\s*\.\s*$/, '');
-    if (party) return { skillId: 'tally', action: 'get_ledger', params: { party_name: party }, suggestedReply: null };
+    let party = ledgerMatch[1].trim().replace(/\s*\.\s*$/, '');
+    // If the captured party name contains date-related words, let OpenAI handle it for proper date extraction
+    const datePartIdx = party.search(DATE_STOP);
+    if (datePartIdx > 0) {
+      // There's a date part — fall through to OpenAI so it can extract both party + dates
+      // (keyword parser can't handle dates)
+    } else if (party && !DATE_STOP.test(' ' + party)) {
+      return { skillId: 'tally', action: 'get_ledger', params: { party_name: party }, suggestedReply: null };
+    }
+    // else fall through to OpenAI for proper date extraction
   }
 
   // get_party_balance: "balance of X", "what does X owe"

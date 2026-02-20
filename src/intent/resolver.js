@@ -204,14 +204,21 @@ function createResolver(config, onLog, deps) {
         const truncated = userMessage.length > 50 ? userMessage.slice(0, 50) + '...' : userMessage;
         onLog('[resolver] "' + truncated + '" → Tier 3 (OpenAI fallback), confidence=1.0');
 
-        // Store learning entry if valid intent
+        // Store learning entry if valid intent — but skip entries with dynamic params
+        // (party names, dates, invoice numbers) since those should be re-extracted each time
         if (result.skillId != null && result.action !== 'unknown') {
-          store.put(normalizedMsg, {
-            skillId: result.skillId,
-            action: result.action,
-            params: result.params || {},
-            suggestedReply: result.suggestedReply || null
-          });
+          const hasDynamicParams = result.params && (
+            result.params.party_name || result.params.date_from || result.params.date_to ||
+            result.params.invoice_number || result.params.company_name
+          );
+          if (!hasDynamicParams) {
+            store.put(normalizedMsg, {
+              skillId: result.skillId,
+              action: result.action,
+              params: result.params || {},
+              suggestedReply: result.suggestedReply || null
+            });
+          }
           lastResolvedKey = normalizedMsg;
         } else {
           lastResolvedKey = null;

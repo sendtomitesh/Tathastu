@@ -241,7 +241,7 @@
     "translateReplies": true
   },
   "resolver": {
-    "enabled": true,
+    "enabled": false,
     "confidenceThreshold": 0.7,
     "patternStorePath": "data/intent-patterns.json",
     "contextPatterns": ["^\\d{1,2}$", "more", "next", "next page", "page \\d+", "aur", "aur dikhao", "aage", "vadhu", "aagal", "his", "her", "their", "same", "yes", "haan", "ha"],
