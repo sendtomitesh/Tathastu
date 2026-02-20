@@ -111,7 +111,9 @@ async function reply(message, text) {
  */
 async function sendDocument(message, buffer, filename, caption) {
   const { MessageMedia } = require('whatsapp-web.js');
-  const base64 = buffer.toString('base64');
+  // Ensure proper Node.js Buffer (Puppeteer may return Uint8Array)
+  const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+  const base64 = buf.toString('base64');
   // Determine mimetype from extension
   const ext = filename.split('.').pop().toLowerCase();
   const mimeMap = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };

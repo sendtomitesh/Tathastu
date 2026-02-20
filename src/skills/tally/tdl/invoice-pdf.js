@@ -331,12 +331,13 @@ async function htmlToPdfBuffer(html) {
   try {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'networkidle0' });
-    const pdfBuffer = await page.pdf({
+    const pdfUint8 = await page.pdf({
       format: 'A4',
       printBackground: true,
       margin: { top: '10mm', bottom: '10mm', left: '10mm', right: '10mm' },
     });
-    return pdfBuffer;
+    // Puppeteer returns Uint8Array — convert to proper Node.js Buffer for base64 encoding
+    return Buffer.from(pdfUint8);
   } finally {
     await browser.close();
   }
