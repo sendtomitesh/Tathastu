@@ -44,7 +44,7 @@ function loadConfig(configPath = process.env.CONFIG_PATH || DEFAULT_CONFIG_PATH)
     model: translationRaw.model || 'mayura:v1',
     translateReplies: translationRaw.translateReplies === true,
   };
-  return { openai, llm, whatsapp, skills, tenants, translation };
+  return { openai, llm, whatsapp, skills, tenants, translation, resolver: raw.resolver || null, debug: raw.debug === true };
 }
 
 /**

@@ -3,6 +3,7 @@ const { SkillRegistry } = require('../skills');
 const { parseIntent, getAvailableCommandsHelp, getCapabilitiesMessage } = require('../openai/parse');
 const { reply, sendDocument } = require('../whatsapp/client');
 const { SarvamClient } = require('../translation/sarvam');
+const { createResolver } = require('../intent/resolver');
 
 /**
  * Create an orchestrator that handles incoming WhatsApp messages:
@@ -33,6 +34,15 @@ function createOrchestrator(options = {}) {
   let lastReportData = null;
   let lastReportName = '';
   
+  // Track last paginated action for "more"/"next" navigation
+  let lastAction = null;
+  let lastParams = null;
+  let lastSkillId = null;
+  let lastPage = 1;
+  
+  // Track last suggestions for number-based selection
+  let lastSuggestions = null; // array of { name, ... }
+  
   // Initialize Sarvam translation client if enabled
   let sarvamClient = null;
   if (config.translation?.enabled && config.translation?.apiKey) {
@@ -44,6 +54,17 @@ function createOrchestrator(options = {}) {
       onLog('[translation] Sarvam client initialized');
     } catch (err) {
       onLog('[translation] Failed to initialize: ' + (err.message || err));
+    }
+  }
+
+  // Initialize local intent resolver if enabled
+  let resolver = null;
+  if (config.resolver?.enabled) {
+    try {
+      resolver = createResolver(config, onLog);
+      onLog('[resolver] Local intent resolver initialized');
+    } catch (err) {
+      onLog('[resolver] Failed to initialize: ' + (err.message || err));
     }
   }
 
@@ -83,6 +104,11 @@ function createOrchestrator(options = {}) {
     const messageBody = (message.body || '').trim();
     if (message.fromMe && messageBody.startsWith('*Tathastu:*')) {
       onLog('Skip: bot echo (has Tathastu prefix)');
+      return;
+    }
+    // Also skip document/media messages sent by the bot (PDF, Excel attachments)
+    if (message.fromMe && (message.type === 'document' || message.type === 'image')) {
+      onLog('Skip: bot attachment echo (type=' + message.type + ')');
       return;
     }
 
@@ -302,8 +328,55 @@ function createOrchestrator(options = {}) {
 
     let responseText;
     let attachment = null;
+    let _debugAction = null, _debugParams = null, _debugTier = null;
     try {
-      const { skillId, action, params, suggestedReply } = await parseIntent(textForProcessing, config, process.env.OPENAI_API_KEY, conversationHistory);
+      // Check for pagination commands ("more", "next", "page 2", etc.)
+      const paginationMatch = textForProcessing.match(/^(?:more|next|next page|aur|aur dikhao|aage|vadhu|aagal|page\s*(\d+))$/i);
+      let skillId, action, params, suggestedReply;
+      if (paginationMatch && lastAction && lastSkillId) {
+        const requestedPage = paginationMatch[1] ? parseInt(paginationMatch[1], 10) : lastPage + 1;
+        skillId = lastSkillId;
+        action = lastAction;
+        params = Object.assign({}, lastParams, { page: requestedPage });
+        suggestedReply = null;
+        _debugTier = 'pagination';
+        lastPage = requestedPage;
+      } else if (/^\d{1,2}$/.test(textForProcessing.trim()) && lastSuggestions && lastAction && lastSkillId) {
+        // User replied with a number — pick from last suggestions list
+        const idx = parseInt(textForProcessing.trim(), 10) - 1;
+        if (idx >= 0 && idx < lastSuggestions.length) {
+          const picked = lastSuggestions[idx].name;
+          skillId = lastSkillId;
+          action = lastAction;
+          params = Object.assign({}, lastParams, { party_name: picked });
+          suggestedReply = null;
+          _debugTier = 'selection';
+          lastSuggestions = null; // clear after use
+        } else {
+          skillId = null;
+          action = 'unknown';
+          params = {};
+          suggestedReply = `Please pick a number between 1 and ${lastSuggestions.length}.`;
+          _debugTier = 'selection';
+        }
+      } else if (resolver) {
+        const result = await resolver.resolveIntent(textForProcessing, config, process.env.OPENAI_API_KEY, conversationHistory);
+        skillId = result.skillId;
+        action = result.action;
+        params = result.params;
+        suggestedReply = result.suggestedReply;
+        _debugTier = result._tier || null;
+      } else {
+        const result = await parseIntent(textForProcessing, config, process.env.OPENAI_API_KEY, conversationHistory);
+        skillId = result.skillId;
+        action = result.action;
+        params = result.params;
+        suggestedReply = result.suggestedReply;
+        _debugTier = 'openai';
+      }
+      _debugAction = action;
+      _debugParams = params;
+      onLog('[debug] Intent: skillId=' + skillId + ' action=' + action + ' params=' + JSON.stringify(params));
       if (skillId == null || action === 'unknown') {
         // For greetings, always use our curated capabilities message
         const isGreeting = /^(hi|hello|hey|hiya|good\s*morning|good\s*evening|good\s*afternoon|gm|sup|namaste|namaskar)\b/i.test(textForProcessing.trim());
@@ -312,19 +385,88 @@ function createOrchestrator(options = {}) {
         } else {
           responseText = (suggestedReply && suggestedReply.length > 0)
             ? suggestedReply
-            : "I didn't understand. " + getAvailableCommandsHelp(config);
+            : "I didn't quite get that. Here's what I can help with:\n\n" + getCapabilitiesMessage();
         }
       } else {
-        // For export_excel, inject last report data
-        if (action === 'export_excel' && lastReportData) {
-          params._reportData = lastReportData;
-          if (!params.report_name) params.report_name = lastReportName;
+        // For export_excel, inject last report data or auto-fetch if needed
+        if (action === 'export_excel') {
+          if (lastReportData) {
+            params._reportData = lastReportData;
+            if (!params.report_name) params.report_name = lastReportName;
+          } else {
+            // No previous report — try to auto-fetch based on what user asked for
+            const txt = textForProcessing.toLowerCase();
+            let autoAction = null, autoParams = {};
+            if (/voucher|payment|receipt|journal|contra/i.test(txt)) {
+              autoAction = 'get_vouchers';
+              const typeMatch = txt.match(/\b(sales|purchase|payment|receipt|contra|journal|credit note|debit note)\b/i);
+              autoParams = { voucher_type: typeMatch ? typeMatch[1] : null, limit: 0 };
+            } else if (/ledger/i.test(txt)) {
+              autoAction = 'list_ledgers';
+              autoParams = {};
+            } else if (/trial\s*bal/i.test(txt)) {
+              autoAction = 'get_trial_balance';
+              autoParams = {};
+            } else if (/balance\s*sheet/i.test(txt)) {
+              autoAction = 'get_balance_sheet';
+              autoParams = {};
+            } else if (/p\s*[&n]\s*l|profit/i.test(txt)) {
+              autoAction = 'get_profit_loss';
+              autoParams = {};
+            } else if (/gst|tax/i.test(txt)) {
+              autoAction = 'get_gst_summary';
+              autoParams = {};
+            } else if (/sales/i.test(txt)) {
+              autoAction = 'get_sales_report';
+              autoParams = { type: 'sales' };
+            } else if (/purchase/i.test(txt)) {
+              autoAction = 'get_sales_report';
+              autoParams = { type: 'purchase' };
+            } else if (/outstanding|receivable|payable/i.test(txt)) {
+              autoAction = 'get_outstanding';
+              autoParams = { type: /payable|creditor/i.test(txt) ? 'payable' : 'receivable' };
+            } else if (/expense/i.test(txt)) {
+              autoAction = 'get_expense_report';
+              autoParams = {};
+            } else if (/stock|inventory/i.test(txt)) {
+              autoAction = 'get_stock_summary';
+              autoParams = {};
+            } else if (/age?ing|overdue/i.test(txt)) {
+              autoAction = 'get_ageing_analysis';
+              autoParams = { type: /payable|creditor/i.test(txt) ? 'payable' : 'receivable' };
+            }
+            if (autoAction) {
+              try {
+                const autoResult = await registry.execute(skillId, autoAction, autoParams);
+                if (autoResult.success && autoResult.data) {
+                  params._reportData = autoResult.data;
+                  params.report_name = params.report_name || autoAction.replace(/^get_/, '').replace(/_/g, ' ');
+                  lastReportData = autoResult.data;
+                  lastReportName = params.report_name;
+                }
+              } catch (e) { /* auto-fetch failed, will show "no report data" message */ }
+            }
+          }
         }
         const result = await registry.execute(skillId, action, params);
         responseText = result.success
           ? (result.message || 'Done.')
           : (result.message || 'Action failed.');
         if (result.attachment) attachment = result.attachment;
+        // Store last action for pagination
+        if (result.success && action !== 'export_excel') {
+          lastSkillId = skillId;
+          lastAction = action;
+          lastParams = Object.assign({}, params);
+          delete lastParams.page; // store without page so we can set it on "more"
+          lastPage = parseInt(params.page, 10) || 1;
+        }
+        // Store suggestions for number-based selection
+        if (result.data && result.data.suggestions && Array.isArray(result.data.suggestions)) {
+          lastSuggestions = result.data.suggestions;
+        } else if (result.success && action !== 'export_excel') {
+          lastSuggestions = null; // clear old suggestions on successful non-suggestion result
+        }
         // Store report data for potential Excel export
         if (result.success && result.data && action !== 'export_excel') {
           lastReportData = result.data;
@@ -334,6 +476,17 @@ function createOrchestrator(options = {}) {
     } catch (err) {
       responseText = 'Error: ' + (err.message || String(err));
       onLog('Error: ' + (err.message || err));
+    }
+
+    // Append debug info if debug mode is enabled
+    if (config.debug && _debugAction) {
+      const cleanParams = Object.assign({}, _debugParams);
+      delete cleanParams._reportData; // don't dump large report data
+      const paramStr = Object.keys(cleanParams).length > 0
+        ? Object.entries(cleanParams).map(([k, v]) => v != null ? k + '=' + v : null).filter(Boolean).join(', ')
+        : 'none';
+      const tierStr = _debugTier ? ' tier=' + _debugTier : '';
+      responseText += '\n\n_(debug: ' + _debugAction + '(' + paramStr + ')' + tierStr + ')_';
     }
 
     // Update conversation history for context in future messages
@@ -397,6 +550,7 @@ function createOrchestrator(options = {}) {
     getConfig: () => config,
     getRegistry: () => registry,
     getMessages: () => [...messages], // Return copy of messages
+    getResolver: () => resolver,
   };
 }
 

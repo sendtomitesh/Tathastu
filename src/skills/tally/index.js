@@ -2,11 +2,11 @@ const tdlClient = require('./tdl');
 
 const MAX_SUGGESTIONS = 5;
 const PAGE_SIZE = 20;
+const MAX_RESULTS = 200; // Cap results to protect Tally from memory issues
 
 /**
  * Paginate a list result for WhatsApp display.
- * Takes a parsed result with message + data array, re-renders the message
- * showing only the requested page, and adds navigation hints.
+ * Caps items at MAX_RESULTS. Shows Excel export hint when capped.
  *
  * @param {object} parsed - { success, message, data } from a parser
  * @param {Array} items - the full array of items to paginate
@@ -16,21 +16,29 @@ const PAGE_SIZE = 20;
  * @returns {object} - { success, message, data } with paginated message
  */
 function paginateResult(parsed, items, page, renderLine, header) {
-  const totalPages = Math.ceil(items.length / PAGE_SIZE);
+  const totalCount = items.length;
+  const wasCapped = totalCount > MAX_RESULTS;
+  const capped = wasCapped ? items.slice(0, MAX_RESULTS) : items;
+  const totalPages = Math.ceil(capped.length / PAGE_SIZE);
   const p = Math.max(1, Math.min(page || 1, totalPages));
   const start = (p - 1) * PAGE_SIZE;
-  const slice = items.slice(start, start + PAGE_SIZE);
+  const slice = capped.slice(start, start + PAGE_SIZE);
 
+  const countLabel = wasCapped ? `showing ${MAX_RESULTS} of ${totalCount}` : `${totalCount} total`;
   const lines = [header, ''];
   slice.forEach((item, i) => {
     lines.push(renderLine(item, start + i));
   });
 
   if (totalPages > 1) {
-    lines.push('', `📄 Page ${p}/${totalPages} (${items.length} total)`);
+    lines.push('', `📄 Page ${p}/${totalPages} (${countLabel})`);
     if (p < totalPages) {
       lines.push(`Say "more" or "page ${p + 1}" to see next.`);
+    } else if (wasCapped) {
+      lines.push(`\n📊 There are ${totalCount - MAX_RESULTS} more entries. Say "export excel" to get the full report.`);
     }
+  } else if (wasCapped) {
+    lines.push('', `📊 Showing ${MAX_RESULTS} of ${totalCount}. Say "export excel" to get the full report.`);
   }
 
   return { success: true, message: lines.join('\n'), data: parsed.data };
@@ -108,7 +116,7 @@ function formatSuggestions(suggestions, originalQuery) {
   suggestions.forEach((s, i) => {
     lines.push(`${i + 1}. ${s.name} (${s.parent || 'N/A'})`);
   });
-  lines.push('\nReply with the exact name to proceed.');
+  lines.push('\nReply with the number or exact name to proceed.');
   return lines.join('\n');
 }
 
@@ -139,9 +147,8 @@ async function execute(skillId, action, params = {}, skillConfig = {}) {
   const port = skillConfig.port ?? 9000;
   const baseUrl = `http://localhost:${port}`;
 
-  // Auto-detect active company from Tally instead of relying on static config.
-  // This ensures queries work after switching companies via open_company.
-  let companyName = skillConfig.companyName || null;
+  // Always detect the active company dynamically from Tally — never use static config.
+  let companyName = null;
   const offlineActions = ['list_companies', 'tally_status', 'start_tally', 'open_company'];
   if (!offlineActions.includes(action)) {
     const now = Date.now();
@@ -152,9 +159,12 @@ async function execute(skillId, action, params = {}, skillConfig = {}) {
           _cachedCompanyName = status.activeCompany;
           _cachedCompanyAt = now;
         }
-      } catch { /* use config fallback */ }
+      } catch { /* detection failed — companyName stays null */ }
     }
-    if (_cachedCompanyName) companyName = _cachedCompanyName;
+    companyName = _cachedCompanyName || null;
+    if (!companyName) {
+      return { success: false, message: 'Could not detect the active company from Tally. Please make sure Tally is running with a company open.' };
+    }
   }
 
   if (action === 'get_ledger') {
@@ -162,6 +172,7 @@ async function execute(skillId, action, params = {}, skillConfig = {}) {
     if (!partyName || typeof partyName !== 'string') {
       return { success: false, message: 'Please specify a party name. Example: "Ledger for Meril" or "Statement of Atul Singh"' };
     }
+    const page = parseInt(params.page, 10) || 1;
     try {
       const resolved = await resolvePartyName(partyName, baseUrl, companyName);
       if (resolved.match === 'none') {
@@ -184,9 +195,36 @@ async function execute(skillId, action, params = {}, skillConfig = {}) {
       const dateTo = params.date_to || null;
       const xml = tdlClient.buildLedgerStatementTdlXml(resolved.name, companyName, dateFrom, dateTo);
       const responseXml = await tdlClient.postTally(baseUrl, xml);
-      const parsed = tdlClient.parseLedgerStatementTdlResponse(responseXml, resolved.name, 20);
+      // Fetch all entries (limit=0) — pagination handles display
+      const parsed = tdlClient.parseLedgerStatementTdlResponse(responseXml, resolved.name, 0);
       if (!parsed.success) return { success: false, message: parsed.message || 'Ledger not found.' };
-      return { success: true, message: parsed.message, data: parsed.data };
+      const entries = parsed.data?.entries || [];
+      if (entries.length === 0) return parsed;
+      // Build a transaction type summary line
+      const typeCounts = {};
+      for (const e of entries) { typeCounts[e.type] = (typeCounts[e.type] || 0) + 1; }
+      const typeSummary = Object.entries(typeCounts).map(([t, c]) => `${t}: ${c}`).join(' | ');
+      const totalDr = entries.filter(e => e.amount >= 0).reduce((s, e) => s + e.amount, 0);
+      const totalCr = entries.filter(e => e.amount < 0).reduce((s, e) => s + Math.abs(e.amount), 0);
+      const net = totalDr - totalCr;
+      const netLabel = net >= 0 ? 'Receivable' : 'Payable';
+      const { formatTallyDate } = tdlClient;
+      const { inr, vchEmoji } = require('./tdl/formatters');
+      const dates = entries.map(e => e.date).filter(Boolean).sort();
+      const fromDate = dates.length ? formatTallyDate(dates[0]) : '';
+      const toDate = dates.length ? formatTallyDate(dates[dates.length - 1]) : '';
+      const header = `📒 *Ledger: ${resolved.name}*\n📅 ${fromDate} to ${toDate} | ${entries.length} entries\n📊 ${typeSummary}\n💰 Dr: ₹${inr(totalDr)} | Cr: ₹${inr(totalCr)} | *Net: ₹${inr(net)} ${netLabel}*`;
+      return paginateResult(
+        { success: true, data: parsed.data },
+        entries, page,
+        (e, i) => {
+          const drCr = e.amount >= 0 ? '🟢' : '🔴';
+          const dateStr = e.date ? formatTallyDate(e.date) : '';
+          const narr = e.narration ? ` _${e.narration.slice(0, 40)}_` : '';
+          return `${drCr} ${dateStr} | ${e.type}${e.number ? ' #' + e.number : ''} — ₹${inr(e.amount)}${narr}`;
+        },
+        header
+      );
     } catch (err) {
       return tallyError(err, port);
     }
@@ -197,22 +235,57 @@ async function execute(skillId, action, params = {}, skillConfig = {}) {
     const dateTo = params.date_to ? tdlClient.toTallyDate(params.date_to) : null;
     const voucherType = params.voucher_type || null;
     const limit = typeof params.limit === 'number' ? params.limit : (params.limit ? parseInt(String(params.limit), 10) : 50);
-    // Compute actual date range here so we can pass to both builder and parser
-    let actualFrom = dateFrom, actualTo = dateTo;
-    if (!dateFrom && !dateTo) {
-      const now = new Date();
-      const today = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
-      actualFrom = today;
-      actualTo = today;
-    } else {
-      actualTo = actualTo || actualFrom;
-    }
+    const page = parseInt(params.page, 10) || 1;
+    let actualFrom = dateFrom || null;
+    let actualTo = dateTo || dateFrom || null;
     try {
-      const xml = tdlClient.buildVouchersTdlXml(companyName, dateFrom, dateTo, voucherType);
-      const responseXml = await tdlClient.postTally(baseUrl, xml);
-      const parsed = tdlClient.parseVouchersTdlResponse(responseXml, limit, actualFrom, actualTo);
-      if (!parsed.success) return { success: false, message: parsed.message || 'Could not fetch vouchers.' };
-      return { success: true, message: parsed.message, data: parsed.data };
+      // Try full range first, fall back to daily chunks on failure
+      let allVouchers;
+      try {
+        const xml = tdlClient.buildVouchersTdlXml(companyName, actualFrom, actualTo, voucherType);
+        const responseXml = await tdlClient.postTally(baseUrl, xml);
+        const parsed = tdlClient.parseVouchersTdlResponse(responseXml, 0, actualFrom, actualTo);
+        allVouchers = parsed.data || [];
+      } catch (firstErr) {
+        console.log('[vouchers] Full range failed, chunking: ' + (firstErr.message || firstErr));
+        if (!actualFrom || !actualTo) {
+          return { success: false, message: 'Could not fetch vouchers from Tally.' };
+        }
+        const chunks = tdlClient.splitDateRange(actualFrom, actualTo, 1);
+        allVouchers = [];
+        for (const chunk of chunks) {
+          try {
+            const xml = tdlClient.buildVouchersTdlXml(companyName, chunk.from, chunk.to, voucherType);
+            const chunkXml = await tdlClient.postTally(baseUrl, xml);
+            const chunkParsed = tdlClient.parseVouchersTdlResponse(chunkXml, 0);
+            if (chunkParsed.data?.length > 0) allVouchers = allVouchers.concat(chunkParsed.data);
+          } catch (chunkErr) {
+            console.log('[vouchers] Chunk ' + chunk.from + '-' + chunk.to + ' failed: ' + (chunkErr.message || chunkErr));
+          }
+        }
+      }
+      if (limit && allVouchers.length > limit) allVouchers = allVouchers.slice(0, limit);
+      if (allVouchers.length === 0) {
+        return { success: true, message: 'No vouchers found for the given period.', data: [] };
+      }
+      const { formatTallyDate } = tdlClient;
+      const { inr, vchEmoji } = require('./tdl/formatters');
+      const dates = allVouchers.map(v => v.date).filter(Boolean).sort();
+      const isSingleDay = dates.length && dates[0] === dates[dates.length - 1];
+      const typeLabel = voucherType ? ` (${voucherType})` : '';
+      const header = isSingleDay
+        ? `📋 *Day Book: ${formatTallyDate(dates[0])}*${typeLabel} (${allVouchers.length} entries)`
+        : `📋 *Vouchers: ${formatTallyDate(dates[0])} to ${formatTallyDate(dates[dates.length - 1])}*${typeLabel} (${allVouchers.length} entries)`;
+      return paginateResult(
+        { success: true, data: allVouchers },
+        allVouchers, page,
+        (v, i) => {
+          const ds = !isSingleDay && v.date ? formatTallyDate(v.date) + ' | ' : '';
+          const narr = v.narration ? ` _${v.narration.slice(0, 30)}_` : '';
+          return `${vchEmoji(v.type)} ${ds}${v.type}${v.number ? ' #' + v.number : ''} — ₹${inr(v.amount)}${v.party ? ' — ' + v.party : ''}${narr}`;
+        },
+        header
+      );
     } catch (err) {
       return tallyError(err, port);
     }
@@ -291,18 +364,63 @@ async function execute(skillId, action, params = {}, skillConfig = {}) {
       : (params.type && params.type.toLowerCase().includes('purchase')) ? 'purchase' : 'sales';
     const dateFrom = params.date_from ? tdlClient.toTallyDate(params.date_from) : null;
     const dateTo = params.date_to ? tdlClient.toTallyDate(params.date_to) : null;
-    // Compute actual date range for JS-side filtering
-    let actualFrom = dateFrom, actualTo = dateTo;
-    if (!dateFrom && !dateTo) {
-      const now = new Date();
-      actualFrom = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}01`;
-      actualTo = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
-    } else {
-      actualTo = actualTo || actualFrom;
-    }
+    // Only apply date range if user explicitly provided dates
+    const userGaveDates = !!(dateFrom || dateTo);
+    let actualFrom = dateFrom || null;
+    let actualTo = dateTo || dateFrom || null;
     try {
-      const xml = tdlClient.buildSalesPurchaseReportTdlXml(companyName, reportType, dateFrom, dateTo);
-      const responseXml = await tdlClient.postTally(baseUrl, xml);
+      let responseXml;
+      let usedChunking = false;
+      try {
+        const xml = tdlClient.buildSalesPurchaseReportTdlXml(companyName, reportType, actualFrom, actualTo);
+        responseXml = await tdlClient.postTally(baseUrl, xml);
+      } catch (firstErr) {
+        // Full range failed (likely memory violation) — fall back to daily chunks
+        console.log('[sales] Full range failed, chunking: ' + (firstErr.message || firstErr));
+        usedChunking = true;
+        const chunks = tdlClient.splitDateRange(actualFrom, actualTo, 1);
+        let allEntries = [];
+        for (const chunk of chunks) {
+          try {
+            const xml = tdlClient.buildSalesPurchaseReportTdlXml(companyName, reportType, chunk.from, chunk.to);
+            const chunkXml = await tdlClient.postTally(baseUrl, xml);
+            const chunkParsed = tdlClient.parseSalesPurchaseReportTdlResponse(chunkXml, reportType);
+            if (chunkParsed.data?.entries?.length > 0) {
+              allEntries = allEntries.concat(chunkParsed.data.entries);
+            }
+          } catch (chunkErr) {
+            console.log('[sales] Chunk ' + chunk.from + '-' + chunk.to + ' failed: ' + (chunkErr.message || chunkErr));
+          }
+        }
+        // Build result from merged chunks
+        const label = reportType === 'purchase' ? 'Purchase' : 'Sales';
+        if (allEntries.length === 0) {
+          return { success: true, message: `No ${label.toLowerCase()} found for the given period.`, data: { type: label, entries: [], byParty: {}, total: 0 } };
+        }
+        const { formatTallyDate } = tdlClient;
+        const { inr } = require('./tdl/formatters');
+        const dates = allEntries.map(v => v.date).filter(Boolean).sort();
+        const byParty = {};
+        let grandTotal = 0;
+        for (const v of allEntries) {
+          const party = v.party || 'Unknown';
+          if (!byParty[party]) byParty[party] = { count: 0, total: 0 };
+          byParty[party].count++;
+          byParty[party].total += Math.abs(v.amount);
+          grandTotal += Math.abs(v.amount);
+        }
+        const sorted = Object.entries(byParty).sort((a, b) => b[1].total - a[1].total);
+        const lines = [
+          `📊 *${label} Report: ${formatTallyDate(dates[0])} to ${formatTallyDate(dates[dates.length - 1])}*`,
+          `🧾 ${allEntries.length} invoices | Total: ₹${inr(grandTotal)}`,
+          '',
+        ];
+        sorted.forEach(([party, info], i) => {
+          lines.push(`${i + 1}. ${party} — ₹${inr(info.total)} (${info.count})`);
+        });
+        return { success: true, message: lines.join('\n'), data: { type: label, entries: allEntries, byParty, total: grandTotal } };
+      }
+      // Full range succeeded — parse normally
       const parsed = tdlClient.parseSalesPurchaseReportTdlResponse(responseXml, reportType, actualFrom, actualTo);
       if (!parsed.success) return { success: false, message: parsed.message || 'Could not fetch report.' };
       return { success: true, message: parsed.message, data: parsed.data };

@@ -1,4 +1,5 @@
 {
+  "debug": true,
   "openai": {
     "model": "gpt-4o-mini"
   },
@@ -13,25 +14,28 @@
       "enabled": true,
       "name": "Tally",
       "config": {
-        "port": "9000",
-        "companyName": "SendMe Technologies Pvt Ltd"
+        "port": "9000"
       },
       "actions": [
         {
           "id": "get_ledger",
-          "description": "Get ledger or statement for a party by name",
+          "description": "Get ledger or statement for a party by name. Also use for 'transactions for X', 'check party X', 'party details for X'. Shows all transaction types (Sales, Payment, Receipt, etc.) with amounts. Supports pagination.",
           "parameters": [
-            "party_name"
+            "party_name",
+            "date_from",
+            "date_to",
+            "page"
           ]
         },
         {
           "id": "get_vouchers",
-          "description": "Get vouchers, optionally by date range and voucher type (e.g. Sales, Purchase, Payment, Receipt). Defaults to today if no date given.",
+          "description": "Get vouchers, optionally by date range and voucher type (e.g. Sales, Purchase, Payment, Receipt). Supports pagination.",
           "parameters": [
             "date_from",
             "date_to",
             "voucher_type",
-            "limit"
+            "limit",
+            "page"
           ]
         },
         {
@@ -235,5 +239,13 @@
     "provider": "sarvam",
     "model": "mayura:v1",
     "translateReplies": true
+  },
+  "resolver": {
+    "enabled": true,
+    "confidenceThreshold": 0.7,
+    "patternStorePath": "data/intent-patterns.json",
+    "contextPatterns": ["^\\d{1,2}$", "more", "next", "next page", "page \\d+", "aur", "aur dikhao", "aage", "vadhu", "aagal", "his", "her", "their", "same", "yes", "haan", "ha"],
+    "correctionTriggers": ["wrong", "galat", "ખોટું", "ghalat"],
+    "openAIFallbackEnabled": true
   }
 }

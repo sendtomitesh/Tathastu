@@ -5,17 +5,13 @@ function buildSalesPurchaseReportTdlXml(companyName, reportType, dateFrom, dateT
   const svParts = ['<SVEXPORTFORMAT>$SysName:XML</SVEXPORTFORMAT>'];
   if (companyName) svParts.push(`<SVCURRENTCOMPANY>${escapeXml(companyName)}</SVCURRENTCOMPANY>`);
 
-  let actualFrom, actualTo;
-  if (!dateFrom && !dateTo) {
-    const now = new Date();
-    actualFrom = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}01`;
-    actualTo = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
-  } else {
-    actualFrom = dateFrom;
-    actualTo = dateTo || dateFrom;
+  // Only set date range if explicitly provided — otherwise Tally returns all matching vouchers
+  if (dateFrom || dateTo) {
+    const actualFrom = dateFrom || dateTo;
+    const actualTo = dateTo || dateFrom;
+    svParts.push(`<SVFROMDATE>${escapeXml(actualFrom)}</SVFROMDATE>`);
+    svParts.push(`<SVTODATE>${escapeXml(actualTo)}</SVTODATE>`);
   }
-  svParts.push(`<SVFROMDATE>${escapeXml(actualFrom)}</SVFROMDATE>`);
-  svParts.push(`<SVTODATE>${escapeXml(actualTo)}</SVTODATE>`);
 
   const vchType = reportType === 'purchase' ? 'Purchase' : 'Sales';
 

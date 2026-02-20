@@ -31,4 +31,5 @@ module.exports = {
   ...require('./order-tracking'),
   ...require('./payment-reminders'),
   ...require('./voucher-create'),
+  ...require('./volume-profiler'),
 };

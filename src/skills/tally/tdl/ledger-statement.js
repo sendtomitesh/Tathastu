@@ -40,8 +40,9 @@ function buildLedgerStatementTdlXml(ledgerName, companyName, dateFrom, dateTo, l
 function parseLedgerStatementTdlResponse(xmlString, ledgerName, limit = 20) {
   const entries = [];
   const regex = /<VOUCHER\s[^>]*>[\s\S]*?<\/VOUCHER>/gi;
+  const maxEntries = limit > 0 ? limit : Infinity;
   let m;
-  while ((m = regex.exec(xmlString)) !== null && entries.length < limit) {
+  while ((m = regex.exec(xmlString)) !== null && entries.length < maxEntries) {
     const block = m[0];
     const extract = (tag) => {
       const mx = block.match(new RegExp(`<${tag}[^>]*>([^<]*)</${tag}>`, 'i'));

@@ -60,4 +60,34 @@ async function postTally(baseUrl, xml) {
   return typeof data === 'string' ? data : String(data);
 }
 
-module.exports = { escapeXml, decodeXml, toTallyDate, toTallyFilterDate, formatTallyDate, postTally };
+/**
+ * Split a YYYYMMDD date range into weekly chunks to avoid Tally memory violations.
+ * Each chunk is { from: 'YYYYMMDD', to: 'YYYYMMDD' }.
+ * @param {string} fromDate - YYYYMMDD
+ * @param {string} toDate - YYYYMMDD
+ * @param {number} [chunkDays=7] - Days per chunk
+ * @returns {Array<{from: string, to: string}>}
+ */
+function splitDateRange(fromDate, toDate, chunkDays = 7) {
+  if (!fromDate || !toDate) return [{ from: fromDate, to: toDate }];
+  const parseD = (s) => new Date(+s.slice(0,4), +s.slice(4,6)-1, +s.slice(6,8));
+  const fmtD = (d) => `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
+  const start = parseD(fromDate);
+  const end = parseD(toDate);
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) {
+    return [{ from: fromDate, to: toDate }];
+  }
+  const chunks = [];
+  let cur = new Date(start);
+  while (cur <= end) {
+    const chunkEnd = new Date(cur);
+    chunkEnd.setDate(chunkEnd.getDate() + chunkDays - 1);
+    if (chunkEnd > end) chunkEnd.setTime(end.getTime());
+    chunks.push({ from: fmtD(cur), to: fmtD(chunkEnd) });
+    cur = new Date(chunkEnd);
+    cur.setDate(cur.getDate() + 1);
+  }
+  return chunks;
+}
+
+module.exports = { escapeXml, decodeXml, toTallyDate, toTallyFilterDate, formatTallyDate, postTally, splitDateRange };

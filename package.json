@@ -31,7 +31,8 @@
   },
   "devDependencies": {
     "electron": "^22.3.27",
-    "electron-builder": "^24.9.1"
+    "electron-builder": "^24.9.1",
+    "fast-check": "^4.5.3"
   },
   "build": {
     "appId": "com.tathastubhav.app",

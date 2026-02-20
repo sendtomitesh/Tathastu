@@ -162,6 +162,23 @@ async function reportToExcel(reportName, data) {
     return { buffer: buf, filename: `${safeName}.xlsx` };
   }
 
+  // Ledger list (from list_ledgers — array of { name, parent })
+  if (Array.isArray(data) && data.length > 0 && data[0].name !== undefined && data[0].parent !== undefined && !('amount' in data[0])) {
+    const cols = ['#', 'Ledger Name', 'Group'];
+    const rows = data.map((l, i) => [i + 1, l.name, l.parent || '']);
+    const buf = await generateExcelBuffer(safeName, cols, rows);
+    return { buffer: buf, filename: `${safeName}.xlsx` };
+  }
+
+  // Flat voucher array (from get_vouchers — data is an array directly)
+  if (Array.isArray(data) && data.length > 0 && data[0].date !== undefined && data[0].type !== undefined) {
+    const cols = ['#', 'Date', 'Type', 'Voucher No', 'Party', 'Amount (₹)', 'Narration'];
+    const rows = data.map((v, i) => [i + 1, v.date || '', v.type || '', v.number || '', v.party || '', Math.abs(v.amount), v.narration || '']);
+    const total = data.reduce((s, v) => s + Math.abs(v.amount), 0);
+    const buf = await generateExcelBuffer(safeName, cols, rows, { totalsRow: ['', '', '', '', 'Total', total, ''] });
+    return { buffer: buf, filename: `${safeName}.xlsx` };
+  }
+
   // Fallback: can't determine shape
   return null;
 }
