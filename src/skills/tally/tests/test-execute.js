@@ -947,13 +947,26 @@ async function runTests() {
   console.log('\nAction Routing — Excel Export:');
   // ═══════════════════════════════════════════════
 
-  await test('export_excel with no data returns error', async () => {
+  await test('export_excel with no data returns exportable list', async () => {
     const mock = mockTdl();
     resetCalls(); resetMockResponses();
     const execute = loadExecuteWithMock(mock);
     const r = await execute('tally', 'export_excel', {}, skillConfig);
     assert(!r.success, 'should fail without report data');
-    assert(r.message.includes('No report data'), 'should say no report data');
+    assert(r.message.includes('Excel Export'), 'should show export help');
+    assert(r.message.includes('Ledgers'), 'should list ledgers as exportable');
+    assert(r.message.includes('Vouchers'), 'should list vouchers as exportable');
+  });
+
+  await test('export_excel with _showHelp returns help (success)', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'export_excel', { _showHelp: true }, skillConfig);
+    assert(r.success, 'should succeed for help');
+    assert(r.message.includes('Excel Export'), 'should show export help');
+    assert(r.message.includes('Trial Balance'), 'should list trial balance');
+    assert(r.message.includes('export profit loss'), 'should have example commands');
   });
 
   await test('export_excel with report data returns attachment', async () => {

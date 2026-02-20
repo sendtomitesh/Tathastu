@@ -369,63 +369,64 @@ function createOrchestrator(options = {}) {
         }
       } else {
         // For export_excel, inject last report data or auto-fetch if needed
-        if (action === 'export_excel') {
-          if (lastReportData) {
+        if (action === 'export_excel' && !params._showHelp) {
+          // Determine if user is asking for a specific report type
+          const txt = textForProcessing.toLowerCase();
+          let autoAction = null, autoParams = {};
+          if (/voucher|payment|receipt|journal|contra/i.test(txt)) {
+            autoAction = 'get_vouchers';
+            const typeMatch = txt.match(/\b(sales|purchase|payment|receipt|contra|journal|credit note|debit note)\b/i);
+            autoParams = { voucher_type: typeMatch ? typeMatch[1] : null, limit: 0 };
+          } else if (/ledger/i.test(txt)) {
+            autoAction = 'list_ledgers';
+            autoParams = {};
+          } else if (/trial\s*bal/i.test(txt)) {
+            autoAction = 'get_trial_balance';
+            autoParams = {};
+          } else if (/balance\s*sheet/i.test(txt)) {
+            autoAction = 'get_balance_sheet';
+            autoParams = {};
+          } else if (/p\s*[&n]\s*l|profit/i.test(txt)) {
+            autoAction = 'get_profit_loss';
+            autoParams = {};
+          } else if (/gst|tax/i.test(txt)) {
+            autoAction = 'get_gst_summary';
+            autoParams = {};
+          } else if (/sales/i.test(txt)) {
+            autoAction = 'get_sales_report';
+            autoParams = { type: 'sales' };
+          } else if (/purchase/i.test(txt)) {
+            autoAction = 'get_sales_report';
+            autoParams = { type: 'purchase' };
+          } else if (/outstanding|receivable|payable/i.test(txt)) {
+            autoAction = 'get_outstanding';
+            autoParams = { type: /payable|creditor/i.test(txt) ? 'payable' : 'receivable' };
+          } else if (/expense/i.test(txt)) {
+            autoAction = 'get_expense_report';
+            autoParams = {};
+          } else if (/stock|inventory/i.test(txt)) {
+            autoAction = 'get_stock_summary';
+            autoParams = {};
+          } else if (/age?ing|overdue/i.test(txt)) {
+            autoAction = 'get_ageing_analysis';
+            autoParams = { type: /payable|creditor/i.test(txt) ? 'payable' : 'receivable' };
+          }
+
+          if (autoAction) {
+            // User asked for a specific report — always auto-fetch fresh data
+            try {
+              const autoResult = await registry.execute(skillId, autoAction, autoParams);
+              if (autoResult.success && autoResult.data) {
+                params._reportData = autoResult.data;
+                params.report_name = params.report_name || autoAction.replace(/^get_/, '').replace(/_/g, ' ');
+                lastReportData = autoResult.data;
+                lastReportName = params.report_name;
+              }
+            } catch (e) { /* auto-fetch failed */ }
+          } else if (lastReportData) {
+            // No specific report detected in text — use last report data
             params._reportData = lastReportData;
             if (!params.report_name) params.report_name = lastReportName;
-          } else {
-            // No previous report — try to auto-fetch based on what user asked for
-            const txt = textForProcessing.toLowerCase();
-            let autoAction = null, autoParams = {};
-            if (/voucher|payment|receipt|journal|contra/i.test(txt)) {
-              autoAction = 'get_vouchers';
-              const typeMatch = txt.match(/\b(sales|purchase|payment|receipt|contra|journal|credit note|debit note)\b/i);
-              autoParams = { voucher_type: typeMatch ? typeMatch[1] : null, limit: 0 };
-            } else if (/ledger/i.test(txt)) {
-              autoAction = 'list_ledgers';
-              autoParams = {};
-            } else if (/trial\s*bal/i.test(txt)) {
-              autoAction = 'get_trial_balance';
-              autoParams = {};
-            } else if (/balance\s*sheet/i.test(txt)) {
-              autoAction = 'get_balance_sheet';
-              autoParams = {};
-            } else if (/p\s*[&n]\s*l|profit/i.test(txt)) {
-              autoAction = 'get_profit_loss';
-              autoParams = {};
-            } else if (/gst|tax/i.test(txt)) {
-              autoAction = 'get_gst_summary';
-              autoParams = {};
-            } else if (/sales/i.test(txt)) {
-              autoAction = 'get_sales_report';
-              autoParams = { type: 'sales' };
-            } else if (/purchase/i.test(txt)) {
-              autoAction = 'get_sales_report';
-              autoParams = { type: 'purchase' };
-            } else if (/outstanding|receivable|payable/i.test(txt)) {
-              autoAction = 'get_outstanding';
-              autoParams = { type: /payable|creditor/i.test(txt) ? 'payable' : 'receivable' };
-            } else if (/expense/i.test(txt)) {
-              autoAction = 'get_expense_report';
-              autoParams = {};
-            } else if (/stock|inventory/i.test(txt)) {
-              autoAction = 'get_stock_summary';
-              autoParams = {};
-            } else if (/age?ing|overdue/i.test(txt)) {
-              autoAction = 'get_ageing_analysis';
-              autoParams = { type: /payable|creditor/i.test(txt) ? 'payable' : 'receivable' };
-            }
-            if (autoAction) {
-              try {
-                const autoResult = await registry.execute(skillId, autoAction, autoParams);
-                if (autoResult.success && autoResult.data) {
-                  params._reportData = autoResult.data;
-                  params.report_name = params.report_name || autoAction.replace(/^get_/, '').replace(/_/g, ' ');
-                  lastReportData = autoResult.data;
-                  lastReportName = params.report_name;
-                }
-              } catch (e) { /* auto-fetch failed, will show "no report data" message */ }
-            }
           }
         }
         const result = await registry.execute(skillId, action, params);

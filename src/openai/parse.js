@@ -267,12 +267,17 @@ function parseWithKeyword(userMessage, config) {
   }
 
   // open_company: "open company X", "switch to X"
-  const compMatch = text.match(/(?:open|switch\s+to|load)\s+(?:company\s+)?(.+?)(?:\s*\.|$)/i);
-  if (compMatch && !/tally/i.test(compMatch[1])) {
+  const compMatch = text.match(/(?:\bopen\b|\bswitch\s+to\b|\bload\b)\s+(?:company\s+)?(.+?)(?:\s*\.|$)/i);
+  if (compMatch && !/tally/i.test(compMatch[1]) && !/excel/i.test(compMatch[1])) {
     return { skillId: 'tally', action: 'open_company', params: { company_name: compMatch[1].trim() }, suggestedReply: null };
   }
 
   // --- Export (must be before voucher/report patterns) ---
+
+  // "what can you export", "what can I export", "export help"
+  if (/what\s+(?:can|do)\s+(?:you|i|we)\s+export/i.test(text) || /export\s+help/i.test(text)) {
+    return { skillId: 'tally', action: 'export_excel', params: { _showHelp: true }, suggestedReply: null };
+  }
 
   // export_excel: "excel for payment vouchers", "download excel", "export excel"
   if (/\bexcel\b|\bexport\b|\bdownload\b/i.test(text)) {
@@ -460,6 +465,7 @@ module.exports = {
   buildSystemPrompt,
   getCapabilitiesMessage,
   parseIntent,
+  parseWithKeyword,
   getAvailableCommandsHelp,
   getProvider,
 };

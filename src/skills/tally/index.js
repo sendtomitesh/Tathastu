@@ -877,13 +877,27 @@ async function execute(skillId, action, params = {}, skillConfig = {}) {
   }
 
   if (action === 'export_excel') {
-    // Export the last report result as Excel. Requires lastReportData to be set.
-    // The orchestrator will pass the last report data via params._reportData
+    // Show help if user asked "what can you export"
+    if (params._showHelp || !params._reportData) {
+      const helpMsg = `📊 *Excel Export*\n\nYou can export these reports to Excel:\n\n` +
+        `• *Ledgers* — "export all ledgers to excel"\n` +
+        `• *Vouchers* — "export all vouchers to excel"\n` +
+        `• *Sales* — "export sales to excel"\n` +
+        `• *Purchase* — "export purchase to excel"\n` +
+        `• *Outstanding* — "export receivable to excel"\n` +
+        `• *Trial Balance* — "export trial balance to excel"\n` +
+        `• *Balance Sheet* — "export balance sheet to excel"\n` +
+        `• *P&L* — "export profit loss to excel"\n` +
+        `• *Expenses* — "export expenses to excel"\n` +
+        `• *Stock* — "export stock to excel"\n` +
+        `• *GST* — "export gst to excel"\n` +
+        `• *Ageing* — "export ageing to excel"\n\n` +
+        `Or first run any report, then say "export excel".`;
+      if (params._showHelp) return { success: true, message: helpMsg };
+      return { success: false, message: helpMsg };
+    }
     const reportData = params._reportData;
     const reportName = params.report_name || 'Report';
-    if (!reportData) {
-      return { success: false, message: 'No report data to export. First run a report (e.g. "outstanding receivable", "expenses this month"), then say "export excel" or "download excel".' };
-    }
     try {
       const result = await tdlClient.reportToExcel(reportName, reportData);
       if (!result) {
