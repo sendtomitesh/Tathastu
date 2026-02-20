@@ -5,9 +5,20 @@
 const tdl = require('../tdl');
 
 let pass = 0, fail = 0;
+const asyncTests = [];
 function test(name, fn) {
-  try { fn(); pass++; console.log(`  ✓ ${name}`); }
-  catch (e) { fail++; console.log(`  ✗ ${name}: ${e.message}`); }
+  try {
+    const result = fn();
+    if (result && typeof result.then === 'function') {
+      // Async test — collect for later
+      asyncTests.push(result.then(() => { pass++; console.log(`  ✓ ${name}`); })
+        .catch(e => { fail++; console.log(`  ✗ ${name}: ${e.message}`); }));
+      return;
+    }
+    pass++; console.log(`  ✓ ${name}`);
+  } catch (e) {
+    fail++; console.log(`  ✗ ${name}: ${e.message}`);
+  }
 }
 function assert(cond, msg) { if (!cond) throw new Error(msg || 'assertion failed'); }
 
@@ -696,6 +707,632 @@ test('isTallyRunning returns object', () => {
   assert(status.running === true || status.running === false);
 });
 
+// ── Top Reports ──
+console.log('\nTop Reports:');
+const topVouchersXml = `<ENVELOPE>
+  <VOUCHER VCHTYPE="Sales"><DATE>20260201</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><VOUCHERNUMBER>S1</VOUCHERNUMBER><PARTYLEDGERNAME>Customer A</PARTYLEDGERNAME><AMOUNT>-50000</AMOUNT>
+    <ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>Widget A</STOCKITEMNAME><RATE>100</RATE><AMOUNT>30000</AMOUNT><BILLEDQTY>300</BILLEDQTY></ALLINVENTORYENTRIES.LIST>
+    <ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>Widget B</STOCKITEMNAME><RATE>200</RATE><AMOUNT>20000</AMOUNT><BILLEDQTY>100</BILLEDQTY></ALLINVENTORYENTRIES.LIST>
+  </VOUCHER>
+  <VOUCHER VCHTYPE="Sales"><DATE>20260205</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><VOUCHERNUMBER>S2</VOUCHERNUMBER><PARTYLEDGERNAME>Customer A</PARTYLEDGERNAME><AMOUNT>-30000</AMOUNT>
+    <ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>Widget A</STOCKITEMNAME><RATE>100</RATE><AMOUNT>30000</AMOUNT><BILLEDQTY>300</BILLEDQTY></ALLINVENTORYENTRIES.LIST>
+  </VOUCHER>
+  <VOUCHER VCHTYPE="Sales"><DATE>20260210</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><VOUCHERNUMBER>S3</VOUCHERNUMBER><PARTYLEDGERNAME>Customer B</PARTYLEDGERNAME><AMOUNT>-20000</AMOUNT>
+    <ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>Widget B</STOCKITEMNAME><RATE>200</RATE><AMOUNT>20000</AMOUNT><BILLEDQTY>100</BILLEDQTY></ALLINVENTORYENTRIES.LIST>
+  </VOUCHER>
+  <VOUCHER VCHTYPE="Sales"><DATE>20260115</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><VOUCHERNUMBER>S4</VOUCHERNUMBER><PARTYLEDGERNAME>Customer C</PARTYLEDGERNAME><AMOUNT>-10000</AMOUNT>
+    <ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>Widget C</STOCKITEMNAME><RATE>50</RATE><AMOUNT>10000</AMOUNT><BILLEDQTY>200</BILLEDQTY></ALLINVENTORYENTRIES.LIST>
+  </VOUCHER>
+</ENVELOPE>`;
+
+test('build top report XML sales', () => {
+  const xml = tdl.buildTopReportTdlXml('Co', 'sales', '20260201', '20260228');
+  assert(xml.includes('TopReportVouchers') && xml.includes('"Sales"'));
+});
+test('build top report XML purchase', () => {
+  const xml = tdl.buildTopReportTdlXml('Co', 'purchase');
+  assert(xml.includes('"Purchase"'));
+});
+test('parse top parties all', () => {
+  const r = tdl.parseTopPartiesResponse(topVouchersXml, 'sales', 10);
+  assert(r.success && r.data.entries.length === 3, `expected 3, got ${r.data.entries.length}`);
+});
+test('parse top parties sorted by total desc', () => {
+  const r = tdl.parseTopPartiesResponse(topVouchersXml, 'sales', 10);
+  assert(r.data.entries[0].name === 'Customer A', `expected Customer A first, got ${r.data.entries[0].name}`);
+  assert(r.data.entries[0].total === 80000, `expected 80000, got ${r.data.entries[0].total}`);
+});
+test('parse top parties with limit', () => {
+  const r = tdl.parseTopPartiesResponse(topVouchersXml, 'sales', 2);
+  assert(r.data.entries.length === 2, `expected 2, got ${r.data.entries.length}`);
+});
+test('parse top parties date filter', () => {
+  const r = tdl.parseTopPartiesResponse(topVouchersXml, 'sales', 10, '20260201', '20260228');
+  assert(r.data.entries.length === 2, `expected 2 (Feb only), got ${r.data.entries.length}`);
+});
+test('parse top parties empty', () => {
+  const r = tdl.parseTopPartiesResponse('<ENVELOPE></ENVELOPE>', 'sales', 10);
+  assert(r.success && r.message.includes('No customers'));
+});
+test('parse top parties percentage', () => {
+  const r = tdl.parseTopPartiesResponse(topVouchersXml, 'sales', 10);
+  assert(r.message.includes('%'), 'should show percentage');
+});
+test('parse top items all', () => {
+  const r = tdl.parseTopItemsResponse(topVouchersXml, 'sales', 10);
+  assert(r.success && r.data.entries.length === 3, `expected 3 items, got ${r.data.entries.length}`);
+});
+test('parse top items sorted by value', () => {
+  const r = tdl.parseTopItemsResponse(topVouchersXml, 'sales', 10);
+  assert(r.data.entries[0].name === 'Widget A', `expected Widget A first, got ${r.data.entries[0].name}`);
+  assert(r.data.entries[0].total === 60000, `expected 60000, got ${r.data.entries[0].total}`);
+});
+test('parse top items with limit', () => {
+  const r = tdl.parseTopItemsResponse(topVouchersXml, 'sales', 2);
+  assert(r.data.entries.length === 2);
+});
+test('parse top items date filter', () => {
+  const r = tdl.parseTopItemsResponse(topVouchersXml, 'sales', 10, '20260201', '20260228');
+  assert(r.data.entries.length === 2, `expected 2 (Feb only, Widget A + B), got ${r.data.entries.length}`);
+});
+test('parse top items qty aggregation', () => {
+  const r = tdl.parseTopItemsResponse(topVouchersXml, 'sales', 10);
+  const widgetA = r.data.entries.find(e => e.name === 'Widget A');
+  assert(widgetA.qty === 600, `expected qty 600, got ${widgetA.qty}`);
+  assert(widgetA.count === 2, `expected 2 txns, got ${widgetA.count}`);
+});
+test('parse top items empty', () => {
+  const r = tdl.parseTopItemsResponse('<ENVELOPE></ENVELOPE>', 'sales', 10);
+  assert(r.success && r.message.includes('No items'));
+});
+
+// ── Trial Balance ──
+console.log('\nTrial Balance:');
+const tbXml = `<ENVELOPE>
+  <GROUP NAME="Capital Account"><NAME>Capital Account</NAME><PARENT>&#4; Primary</PARENT><OPENINGBALANCE>-100000</OPENINGBALANCE><CLOSINGBALANCE>-150000</CLOSINGBALANCE></GROUP>
+  <GROUP NAME="Current Assets"><NAME>Current Assets</NAME><PARENT>&#4; Primary</PARENT><OPENINGBALANCE>200000</OPENINGBALANCE><CLOSINGBALANCE>300000</CLOSINGBALANCE></GROUP>
+  <GROUP NAME="Current Liabilities"><NAME>Current Liabilities</NAME><PARENT>&#4; Primary</PARENT><OPENINGBALANCE>-50000</OPENINGBALANCE><CLOSINGBALANCE>-80000</CLOSINGBALANCE></GROUP>
+  <GROUP NAME="Fixed Assets"><NAME>Fixed Assets</NAME><PARENT>&#4; Primary</PARENT><OPENINGBALANCE>50000</OPENINGBALANCE><CLOSINGBALANCE>60000</CLOSINGBALANCE></GROUP>
+  <GROUP NAME="Sales Accounts"><NAME>Sales Accounts</NAME><PARENT>&#4; Primary</PARENT><OPENINGBALANCE>0</OPENINGBALANCE><CLOSINGBALANCE>-200000</CLOSINGBALANCE></GROUP>
+  <GROUP NAME="Direct Expenses"><NAME>Direct Expenses</NAME><PARENT>&#4; Primary</PARENT><OPENINGBALANCE>0</OPENINGBALANCE><CLOSINGBALANCE>70000</CLOSINGBALANCE></GROUP>
+  <GROUP NAME="Sub Group"><NAME>Sub Group</NAME><PARENT>Current Assets</PARENT><OPENINGBALANCE>10000</OPENINGBALANCE><CLOSINGBALANCE>15000</CLOSINGBALANCE></GROUP>
+</ENVELOPE>`;
+
+test('build trial balance XML default FY', () => {
+  const xml = tdl.buildTrialBalanceTdlXml('Co');
+  assert(xml.includes('TrialBalGroups') && !xml.includes('SVFROMDATE'));
+});
+test('build trial balance XML with dates', () => {
+  const xml = tdl.buildTrialBalanceTdlXml('Co', '20250401', '20260331');
+  assert(xml.includes('SVFROMDATE') && xml.includes('20250401'));
+});
+test('parse trial balance filters top-level only', () => {
+  const r = tdl.parseTrialBalanceTdlResponse(tbXml);
+  assert(r.success);
+  // Sub Group has parent "Current Assets" so should be excluded
+  const names = r.data.groups.map(g => g.name);
+  assert(!names.includes('Sub Group'), 'should exclude sub-groups');
+  assert(r.data.groups.length === 6, `expected 6 top-level groups, got ${r.data.groups.length}`);
+});
+test('parse trial balance debit/credit totals', () => {
+  const r = tdl.parseTrialBalanceTdlResponse(tbXml);
+  // Debit (positive): Current Assets 300000 + Fixed Assets 60000 + Direct Expenses 70000 = 430000
+  assert(r.data.totalDebit === 430000, `expected debit 430000, got ${r.data.totalDebit}`);
+  // Credit (negative): Capital Account 150000 + Current Liabilities 80000 + Sales Accounts 200000 = 430000
+  assert(r.data.totalCredit === 430000, `expected credit 430000, got ${r.data.totalCredit}`);
+});
+test('parse trial balance balanced message', () => {
+  const r = tdl.parseTrialBalanceTdlResponse(tbXml);
+  assert(r.message.includes('Balanced'), 'should show balanced when debit = credit');
+});
+test('parse trial balance unbalanced', () => {
+  const unbalXml = `<ENVELOPE>
+    <GROUP NAME="Current Assets"><NAME>Current Assets</NAME><PARENT>&#4; Primary</PARENT><OPENINGBALANCE>0</OPENINGBALANCE><CLOSINGBALANCE>100000</CLOSINGBALANCE></GROUP>
+    <GROUP NAME="Capital Account"><NAME>Capital Account</NAME><PARENT>&#4; Primary</PARENT><OPENINGBALANCE>0</OPENINGBALANCE><CLOSINGBALANCE>-80000</CLOSINGBALANCE></GROUP>
+  </ENVELOPE>`;
+  const r = tdl.parseTrialBalanceTdlResponse(unbalXml);
+  assert(r.message.includes('Difference'), 'should show difference when unbalanced');
+  assert(r.data.difference === 20000, `expected diff 20000, got ${r.data.difference}`);
+});
+test('parse trial balance empty', () => {
+  const r = tdl.parseTrialBalanceTdlResponse('<ENVELOPE></ENVELOPE>');
+  assert(r.success && r.message.includes('No Trial Balance'));
+});
+
+// ── Balance Sheet ──
+console.log('\nBalance Sheet:');
+const bsXml = `<ENVELOPE>
+  <GROUP NAME="Capital Account"><NAME>Capital Account</NAME><PARENT>&#4; Primary</PARENT><CLOSINGBALANCE>-500000</CLOSINGBALANCE></GROUP>
+  <GROUP NAME="Current Assets"><NAME>Current Assets</NAME><PARENT>&#4; Primary</PARENT><CLOSINGBALANCE>300000</CLOSINGBALANCE></GROUP>
+  <GROUP NAME="Current Liabilities"><NAME>Current Liabilities</NAME><PARENT>&#4; Primary</PARENT><CLOSINGBALANCE>-100000</CLOSINGBALANCE></GROUP>
+  <GROUP NAME="Fixed Assets"><NAME>Fixed Assets</NAME><PARENT>&#4; Primary</PARENT><CLOSINGBALANCE>250000</CLOSINGBALANCE></GROUP>
+  <GROUP NAME="Investments"><NAME>Investments</NAME><PARENT>&#4; Primary</PARENT><CLOSINGBALANCE>50000</CLOSINGBALANCE></GROUP>
+  <GROUP NAME="Sales Accounts"><NAME>Sales Accounts</NAME><PARENT>&#4; Primary</PARENT><CLOSINGBALANCE>-800000</CLOSINGBALANCE></GROUP>
+  <GROUP NAME="Direct Expenses"><NAME>Direct Expenses</NAME><PARENT>&#4; Primary</PARENT><CLOSINGBALANCE>400000</CLOSINGBALANCE></GROUP>
+  <GROUP NAME="Indirect Expenses"><NAME>Indirect Expenses</NAME><PARENT>&#4; Primary</PARENT><CLOSINGBALANCE>200000</CLOSINGBALANCE></GROUP>
+  <GROUP NAME="Sub Group"><NAME>Sub Group</NAME><PARENT>Current Assets</PARENT><CLOSINGBALANCE>50000</CLOSINGBALANCE></GROUP>
+</ENVELOPE>`;
+
+test('build balance sheet XML default FY', () => {
+  const xml = tdl.buildBalanceSheetTdlXml('Co');
+  assert(xml.includes('BSGroups') && !xml.includes('SVFROMDATE'));
+});
+test('build balance sheet XML with dates', () => {
+  const xml = tdl.buildBalanceSheetTdlXml('Co', '20250401', '20260331');
+  assert(xml.includes('SVFROMDATE'));
+});
+test('parse balance sheet excludes P&L groups', () => {
+  const r = tdl.parseBalanceSheetTdlResponse(bsXml);
+  assert(r.success);
+  const allNames = [...r.data.assets.map(a => a.name), ...r.data.liabilities.map(l => l.name)];
+  assert(!allNames.includes('Sales Accounts'), 'should exclude Sales Accounts');
+  assert(!allNames.includes('Direct Expenses'), 'should exclude Direct Expenses');
+  assert(!allNames.includes('Indirect Expenses'), 'should exclude Indirect Expenses');
+  assert(!allNames.includes('Sub Group'), 'should exclude sub-groups');
+});
+test('parse balance sheet assets', () => {
+  const r = tdl.parseBalanceSheetTdlResponse(bsXml);
+  const assetNames = r.data.assets.map(a => a.name);
+  assert(assetNames.includes('Current Assets'), 'should have Current Assets');
+  assert(assetNames.includes('Fixed Assets'), 'should have Fixed Assets');
+  assert(assetNames.includes('Investments'), 'should have Investments');
+  assert(r.data.totalAssets === 600000, `expected 600000, got ${r.data.totalAssets}`);
+});
+test('parse balance sheet liabilities', () => {
+  const r = tdl.parseBalanceSheetTdlResponse(bsXml);
+  const liabNames = r.data.liabilities.map(l => l.name);
+  assert(liabNames.includes('Capital Account'), 'should have Capital Account');
+  assert(liabNames.includes('Current Liabilities'), 'should have Current Liabilities');
+  assert(r.data.totalLiabilities === 600000, `expected 600000, got ${r.data.totalLiabilities}`);
+});
+test('parse balance sheet balanced', () => {
+  const r = tdl.parseBalanceSheetTdlResponse(bsXml);
+  assert(r.message.includes('Balanced'), 'should show balanced');
+});
+test('parse balance sheet empty', () => {
+  const r = tdl.parseBalanceSheetTdlResponse('<ENVELOPE></ENVELOPE>');
+  assert(r.success && r.message.includes('No Balance Sheet'));
+});
+
+// ── Ageing Analysis ──
+console.log('\nAgeing Analysis:');
+// Create bills with various due dates relative to "today"
+const today = new Date();
+const fmt = (d) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+const daysAgo = (n) => { const d = new Date(today); d.setDate(d.getDate() - n); return fmt(d); };
+
+const ageingXml = `<ENVELOPE>
+  <BILL NAME="INV-001"><NAME>INV-001</NAME><PARENT>Party A</PARENT><CLOSINGBALANCE>-10000</CLOSINGBALANCE><FINALDUEDATE>${daysAgo(10)}</FINALDUEDATE></BILL>
+  <BILL NAME="INV-002"><NAME>INV-002</NAME><PARENT>Party A</PARENT><CLOSINGBALANCE>-20000</CLOSINGBALANCE><FINALDUEDATE>${daysAgo(45)}</FINALDUEDATE></BILL>
+  <BILL NAME="INV-003"><NAME>INV-003</NAME><PARENT>Party B</PARENT><CLOSINGBALANCE>-15000</CLOSINGBALANCE><FINALDUEDATE>${daysAgo(75)}</FINALDUEDATE></BILL>
+  <BILL NAME="INV-004"><NAME>INV-004</NAME><PARENT>Party C</PARENT><CLOSINGBALANCE>-50000</CLOSINGBALANCE><FINALDUEDATE>${daysAgo(120)}</FINALDUEDATE></BILL>
+  <BILL NAME="INV-005"><NAME>INV-005</NAME><PARENT>Party C</PARENT><CLOSINGBALANCE>0</CLOSINGBALANCE><FINALDUEDATE>${daysAgo(5)}</FINALDUEDATE></BILL>
+</ENVELOPE>`;
+
+test('build ageing XML', () => {
+  const xml = tdl.buildAgeingAnalysisTdlXml('Sundry Debtors', 'Co');
+  assert(xml.includes('AgeingBills') && xml.includes('AgeingNonZeroFilter'));
+});
+test('parse ageing filters zero balance', () => {
+  const r = tdl.parseAgeingAnalysisTdlResponse(ageingXml, 'Sundry Debtors');
+  assert(r.success && r.data.totalBills === 4, `expected 4 bills, got ${r.data.totalBills}`);
+});
+test('parse ageing buckets', () => {
+  const r = tdl.parseAgeingAnalysisTdlResponse(ageingXml, 'Sundry Debtors');
+  const buckets = r.data.buckets;
+  // INV-001: 10 days → 0-30 bucket (10000)
+  assert(buckets[0].amount === 10000, `0-30 bucket: expected 10000, got ${buckets[0].amount}`);
+  // INV-002: 45 days → 31-60 bucket (20000)
+  assert(buckets[1].amount === 20000, `31-60 bucket: expected 20000, got ${buckets[1].amount}`);
+  // INV-003: 75 days → 61-90 bucket (15000)
+  assert(buckets[2].amount === 15000, `61-90 bucket: expected 15000, got ${buckets[2].amount}`);
+  // INV-004: 120 days → 90+ bucket (50000)
+  assert(buckets[3].amount === 50000, `90+ bucket: expected 50000, got ${buckets[3].amount}`);
+});
+test('parse ageing total outstanding', () => {
+  const r = tdl.parseAgeingAnalysisTdlResponse(ageingXml, 'Sundry Debtors');
+  assert(r.data.totalOutstanding === 95000, `expected 95000, got ${r.data.totalOutstanding}`);
+});
+test('parse ageing parties aggregation', () => {
+  const r = tdl.parseAgeingAnalysisTdlResponse(ageingXml, 'Sundry Debtors');
+  assert(r.data.parties.length === 3, `expected 3 parties, got ${r.data.parties.length}`);
+  // Party C should be first (highest total: 50000)
+  assert(r.data.parties[0].name === 'Party C', `expected Party C first, got ${r.data.parties[0].name}`);
+  assert(r.data.parties[0].total === 50000, `expected 50000, got ${r.data.parties[0].total}`);
+});
+test('parse ageing oldest days tracking', () => {
+  const r = tdl.parseAgeingAnalysisTdlResponse(ageingXml, 'Sundry Debtors');
+  const partyC = r.data.parties.find(p => p.name === 'Party C');
+  assert(partyC.oldestDays === 120, `expected 120 days, got ${partyC.oldestDays}`);
+});
+test('parse ageing receivable label', () => {
+  const r = tdl.parseAgeingAnalysisTdlResponse(ageingXml, 'Sundry Debtors');
+  assert(r.message.includes('Receivable'), 'should show Receivable for Sundry Debtors');
+});
+test('parse ageing payable label', () => {
+  const r = tdl.parseAgeingAnalysisTdlResponse(ageingXml, 'Sundry Creditors');
+  assert(r.message.includes('Payable'), 'should show Payable for Sundry Creditors');
+});
+test('parse ageing empty', () => {
+  const r = tdl.parseAgeingAnalysisTdlResponse('<ENVELOPE></ENVELOPE>', 'Sundry Debtors');
+  assert(r.success && r.message.includes('No pending'));
+});
+test('parse ageing warning for 90+ days', () => {
+  const r = tdl.parseAgeingAnalysisTdlResponse(ageingXml, 'Sundry Debtors');
+  assert(r.message.includes('⚠️'), 'should show warning for 90+ day parties');
+});
+
+// ── Invoice PDF Bank Details ──
+console.log('\nInvoice PDF Bank Details:');
+test('parseCompanyInfoResponse extracts bank details', () => {
+  const xmlWithBank = `<ENVELOPE><BODY><DATA><COLLECTION>
+    <COMPANY NAME="Test Co" RESERVEDNAME="">
+      <NAME TYPE="String">Test Co</NAME><BASICCOMPANYFORMALNAME TYPE="String">Test Company Pvt Ltd</BASICCOMPANYFORMALNAME>
+      <EMAIL TYPE="String">test@example.com</EMAIL><STATENAME TYPE="String">Gujarat</STATENAME>
+      <ADDRESS.LIST TYPE="String"><ADDRESS TYPE="String">123 Main St</ADDRESS></ADDRESS.LIST>
+      <BANKNAME TYPE="String">HDFC Bank</BANKNAME>
+      <ACCOUNTNUMBER TYPE="String">12345678901234</ACCOUNTNUMBER>
+      <IFSCCODE TYPE="String">HDFC0001234</IFSCCODE>
+      <BANKBRANCHNAME TYPE="String">Ahmedabad Main</BANKBRANCHNAME>
+    </COMPANY>
+  </COLLECTION></DATA></BODY></ENVELOPE>`;
+  const co = tdl.parseCompanyInfoResponse(xmlWithBank);
+  assert(co.bankName === 'HDFC Bank', `expected HDFC Bank, got ${co.bankName}`);
+  assert(co.accountNumber === '12345678901234', `expected 12345678901234, got ${co.accountNumber}`);
+  assert(co.ifscCode === 'HDFC0001234', `expected HDFC0001234, got ${co.ifscCode}`);
+  assert(co.bankBranch === 'Ahmedabad Main', `expected Ahmedabad Main, got ${co.bankBranch}`);
+});
+test('parseCompanyInfoResponse handles missing bank details', () => {
+  const xmlNoBank = `<ENVELOPE><BODY><DATA><COLLECTION>
+    <COMPANY NAME="Test Co" RESERVEDNAME="">
+      <NAME TYPE="String">Test Co</NAME><BASICCOMPANYFORMALNAME TYPE="String">Test Company Pvt Ltd</BASICCOMPANYFORMALNAME>
+    </COMPANY>
+  </COLLECTION></DATA></BODY></ENVELOPE>`;
+  const co = tdl.parseCompanyInfoResponse(xmlNoBank);
+  assert(co.bankName === '', 'bankName should be empty');
+  assert(co.accountNumber === '', 'accountNumber should be empty');
+});
+test('generateInvoiceHtml includes bank details when present', () => {
+  const inv = { date: '20260215', number: 'INV-001', type: 'Sales', party: 'Test Party', amount: -10000, narration: '', items: [], ledgerEntries: [{ name: 'Sales', amount: 10000, isParty: false }] };
+  const co = { name: 'Test Co', address: [], email: '', state: '', pincode: '', gstin: '', phone: '', bankName: 'HDFC Bank', accountNumber: '1234567890', ifscCode: 'HDFC0001234', bankBranch: 'Main Branch' };
+  const party = { name: 'Test Party', address: [], gstin: '', state: '', phone: '', email: '' };
+  const html = tdl.generateInvoiceHtml(inv, co, party);
+  assert(html.includes('HDFC Bank'), 'should include bank name');
+  assert(html.includes('1234567890'), 'should include account number');
+  assert(html.includes('HDFC0001234'), 'should include IFSC code');
+  assert(html.includes('Main Branch'), 'should include branch name');
+  assert(html.includes('Bank Details'), 'should have Bank Details label');
+});
+test('generateInvoiceHtml omits bank section when no bank details', () => {
+  const inv = { date: '20260215', number: 'INV-002', type: 'Sales', party: 'Test', amount: -5000, narration: '', items: [], ledgerEntries: [{ name: 'Sales', amount: 5000, isParty: false }] };
+  const co = { name: 'Test Co', address: [], email: '', state: '', pincode: '', gstin: '', phone: '', bankName: '', accountNumber: '', ifscCode: '', bankBranch: '' };
+  const party = { name: 'Test', address: [], gstin: '', state: '', phone: '', email: '' };
+  const html = tdl.generateInvoiceHtml(inv, co, party);
+  assert(!html.includes('Bank Details'), 'should NOT have Bank Details when empty');
+});
+
+// ── Inactive Reports ──
+console.log('\nInactive Reports:');
+const inactiveVouchersXml = (() => {
+  const now = new Date();
+  const fmt = (d) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+  const ago = (n) => { const d = new Date(now); d.setDate(d.getDate() - n); return fmt(d); };
+  return `<ENVELOPE>
+    <VOUCHER VCHTYPE="Sales"><DATE>${ago(5)}</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><PARTYLEDGERNAME>Active Customer</PARTYLEDGERNAME><AMOUNT>-10000</AMOUNT>
+      <ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>Active Item</STOCKITEMNAME><AMOUNT>10000</AMOUNT></ALLINVENTORYENTRIES.LIST>
+    </VOUCHER>
+    <VOUCHER VCHTYPE="Sales"><DATE>${ago(60)}</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><PARTYLEDGERNAME>Dormant Customer</PARTYLEDGERNAME><AMOUNT>-20000</AMOUNT>
+      <ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>Slow Item</STOCKITEMNAME><AMOUNT>20000</AMOUNT></ALLINVENTORYENTRIES.LIST>
+    </VOUCHER>
+    <VOUCHER VCHTYPE="Sales"><DATE>${ago(100)}</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><PARTYLEDGERNAME>Very Old Customer</PARTYLEDGERNAME><AMOUNT>-5000</AMOUNT>
+      <ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>Dead Item</STOCKITEMNAME><AMOUNT>5000</AMOUNT></ALLINVENTORYENTRIES.LIST>
+    </VOUCHER>
+  </ENVELOPE>`;
+})();
+
+test('build inactive report XML', () => {
+  const xml = tdl.buildInactiveReportTdlXml('Co', 'sales');
+  assert(xml.includes('InactiveReportVouchers') && xml.includes('"Sales"'));
+});
+test('parse inactive parties 30 days', () => {
+  const r = tdl.parseInactivePartiesResponse(inactiveVouchersXml, 'sales', 30);
+  assert(r.success);
+  // Active Customer (5 days ago) should NOT be inactive
+  // Dormant (60 days) and Very Old (100 days) should be inactive
+  assert(r.data.entries.length === 2, `expected 2 inactive, got ${r.data.entries.length}`);
+});
+test('parse inactive parties 90 days', () => {
+  const r = tdl.parseInactivePartiesResponse(inactiveVouchersXml, 'sales', 90);
+  // Only Very Old Customer (100 days) should be inactive
+  assert(r.data.entries.length === 1, `expected 1 inactive, got ${r.data.entries.length}`);
+  assert(r.data.entries[0].name === 'Very Old Customer');
+});
+test('parse inactive parties all active', () => {
+  const r = tdl.parseInactivePartiesResponse(inactiveVouchersXml, 'sales', 365);
+  assert(r.data.entries.length === 0, 'all should be active within 365 days');
+  assert(r.message.includes('active'), 'should say all active');
+});
+test('parse inactive parties empty', () => {
+  const r = tdl.parseInactivePartiesResponse('<ENVELOPE></ENVELOPE>', 'sales', 30);
+  assert(r.data.entries.length === 0);
+});
+test('parse inactive items 30 days', () => {
+  const r = tdl.parseInactiveItemsResponse(inactiveVouchersXml, 'sales', 30);
+  assert(r.success);
+  assert(r.data.entries.length === 2, `expected 2 inactive items, got ${r.data.entries.length}`);
+});
+test('parse inactive items 90 days', () => {
+  const r = tdl.parseInactiveItemsResponse(inactiveVouchersXml, 'sales', 90);
+  assert(r.data.entries.length === 1, `expected 1 inactive item, got ${r.data.entries.length}`);
+  assert(r.data.entries[0].name === 'Dead Item');
+});
+test('parse inactive items empty', () => {
+  const r = tdl.parseInactiveItemsResponse('<ENVELOPE></ENVELOPE>', 'sales', 30);
+  assert(r.data.entries.length === 0);
+});
+
+// ── Excel Export ──
+console.log('\nExcel Export:');
+test('generateExcelBuffer creates buffer', async () => {
+  const buf = await tdl.generateExcelBuffer('Test', ['Name', 'Amount'], [['A', 100], ['B', 200]], { totalsRow: ['Total', 300] });
+  assert(Buffer.isBuffer(buf), 'should return Buffer');
+  assert(buf.length > 100, 'buffer should have content');
+});
+test('reportToExcel outstanding entries', async () => {
+  const data = { entries: [{ name: 'Party A', closingBalance: -25000 }, { name: 'Party B', closingBalance: -10000 }] };
+  const result = await tdl.reportToExcel('Outstanding', data);
+  assert(result !== null, 'should produce result');
+  assert(result.filename === 'Outstanding.xlsx');
+  assert(Buffer.isBuffer(result.buffer));
+});
+test('reportToExcel stock items', async () => {
+  const data = { items: [{ name: 'Widget', qty: 100, unit: 'Nos', rate: 50, closingValue: 5000 }] };
+  const result = await tdl.reportToExcel('Stock', data);
+  assert(result !== null && result.filename === 'Stock.xlsx');
+});
+test('reportToExcel groups (trial balance)', async () => {
+  const data = { groups: [{ name: 'Assets', closing: 100000 }] };
+  const result = await tdl.reportToExcel('Trial Balance', data);
+  assert(result !== null && result.filename === 'Trial Balance.xlsx');
+});
+test('reportToExcel bills', async () => {
+  const data = { bills: [{ name: 'INV-001', closingBalance: -35000, dueDate: '20260115' }] };
+  const result = await tdl.reportToExcel('Bills', data);
+  assert(result !== null && result.filename === 'Bills.xlsx');
+});
+test('reportToExcel ageing buckets', async () => {
+  const data = { buckets: [{ label: '0-30', amount: 10000, count: 5 }], totalOutstanding: 10000, totalBills: 5 };
+  const result = await tdl.reportToExcel('Ageing', data);
+  assert(result !== null && result.filename === 'Ageing.xlsx');
+});
+test('reportToExcel returns null for unknown shape', async () => {
+  const result = await tdl.reportToExcel('Unknown', { foo: 'bar' });
+  assert(result === null, 'should return null for unknown data shape');
+});
+
+// ── Order Tracking ──
+console.log('\nOrder Tracking:');
+const orderXml = `<ENVELOPE>
+  <VOUCHER VCHTYPE="Sales Order"><DATE>20260210</DATE><VOUCHERTYPENAME>Sales Order</VOUCHERTYPENAME><VOUCHERNUMBER>SO-001</VOUCHERNUMBER><PARTYLEDGERNAME>Customer A</PARTYLEDGERNAME><AMOUNT>-50000</AMOUNT><NARRATION>Feb order</NARRATION>
+    <ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>Widget A</STOCKITEMNAME><RATE>100</RATE><AMOUNT>50000</AMOUNT><BILLEDQTY>500</BILLEDQTY></ALLINVENTORYENTRIES.LIST>
+  </VOUCHER>
+  <VOUCHER VCHTYPE="Sales Order"><DATE>20260215</DATE><VOUCHERTYPENAME>Sales Order</VOUCHERTYPENAME><VOUCHERNUMBER>SO-002</VOUCHERNUMBER><PARTYLEDGERNAME>Customer B</PARTYLEDGERNAME><AMOUNT>-30000</AMOUNT><NARRATION>Feb order 2</NARRATION>
+    <ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>Widget B</STOCKITEMNAME><RATE>200</RATE><AMOUNT>30000</AMOUNT><BILLEDQTY>150</BILLEDQTY></ALLINVENTORYENTRIES.LIST>
+  </VOUCHER>
+  <VOUCHER VCHTYPE="Sales Order"><DATE>20260105</DATE><VOUCHERTYPENAME>Sales Order</VOUCHERTYPENAME><VOUCHERNUMBER>SO-003</VOUCHERNUMBER><PARTYLEDGERNAME>Customer A</PARTYLEDGERNAME><AMOUNT>-20000</AMOUNT><NARRATION>Jan order</NARRATION></VOUCHER>
+</ENVELOPE>`;
+
+test('build order tracking XML sales', () => {
+  const xml = tdl.buildOrderTrackingTdlXml('Co', 'sales');
+  assert(xml.includes('OrderTrackingVouchers') && xml.includes('Sales Order'));
+});
+test('build order tracking XML purchase', () => {
+  const xml = tdl.buildOrderTrackingTdlXml('Co', 'purchase');
+  assert(xml.includes('Purchase Order'));
+});
+test('parse orders all', () => {
+  const r = tdl.parseOrderTrackingResponse(orderXml, 'sales');
+  assert(r.success && r.data.orders.length === 3, `expected 3, got ${r.data.orders.length}`);
+});
+test('parse orders sorted newest first', () => {
+  const r = tdl.parseOrderTrackingResponse(orderXml, 'sales');
+  assert(r.data.orders[0].number === 'SO-002', 'newest should be first');
+});
+test('parse orders date filter', () => {
+  const r = tdl.parseOrderTrackingResponse(orderXml, 'sales', '20260201', '20260228');
+  assert(r.data.orders.length === 2, `expected 2 (Feb only), got ${r.data.orders.length}`);
+});
+test('parse orders with items', () => {
+  const r = tdl.parseOrderTrackingResponse(orderXml, 'sales');
+  const so1 = r.data.orders.find(o => o.number === 'SO-001');
+  assert(so1.items.length === 1 && so1.items[0].name === 'Widget A');
+});
+test('parse orders total', () => {
+  const r = tdl.parseOrderTrackingResponse(orderXml, 'sales');
+  assert(r.data.total === 100000, `expected 100000, got ${r.data.total}`);
+});
+test('parse orders empty', () => {
+  const r = tdl.parseOrderTrackingResponse('<ENVELOPE></ENVELOPE>', 'sales');
+  assert(r.success && r.message.includes('No sales'));
+});
+test('compute pending orders', () => {
+  const ordersData = tdl.parseOrderTrackingResponse(orderXml, 'sales');
+  // Customer A ordered 70000, invoiced 50000 → pending 20000
+  // Customer B ordered 30000, invoiced 30000 → fulfilled
+  const invoiceXml = `<ENVELOPE>
+    <VOUCHER VCHTYPE="Sales"><DATE>20260212</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><PARTYLEDGERNAME>Customer A</PARTYLEDGERNAME><AMOUNT>-50000</AMOUNT></VOUCHER>
+    <VOUCHER VCHTYPE="Sales"><DATE>20260216</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><PARTYLEDGERNAME>Customer B</PARTYLEDGERNAME><AMOUNT>-30000</AMOUNT></VOUCHER>
+  </ENVELOPE>`;
+  const r = tdl.computePendingOrders(ordersData.data, invoiceXml, 'sales');
+  assert(r.success);
+  assert(r.data.pending.length === 1, `expected 1 pending party, got ${r.data.pending.length}`);
+  assert(r.data.pending[0].party === 'Customer A');
+  assert(r.data.pending[0].pending === 20000, `expected 20000 pending, got ${r.data.pending[0].pending}`);
+});
+test('compute pending orders all fulfilled', () => {
+  const ordersData = tdl.parseOrderTrackingResponse(orderXml, 'sales');
+  const invoiceXml = `<ENVELOPE>
+    <VOUCHER VCHTYPE="Sales"><DATE>20260212</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><PARTYLEDGERNAME>Customer A</PARTYLEDGERNAME><AMOUNT>-70000</AMOUNT></VOUCHER>
+    <VOUCHER VCHTYPE="Sales"><DATE>20260216</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><PARTYLEDGERNAME>Customer B</PARTYLEDGERNAME><AMOUNT>-30000</AMOUNT></VOUCHER>
+  </ENVELOPE>`;
+  const r = tdl.computePendingOrders(ordersData.data, invoiceXml, 'sales');
+  assert(r.data.pending.length === 0, 'all should be fulfilled');
+  assert(r.message.includes('fully fulfilled'));
+});
+test('build voucher type counts XML', () => {
+  const xml = tdl.buildVoucherTypeCountsTdlXml('Co');
+  assert(xml.includes('VchTypeCounts') && xml.includes('VoucherTypeName'));
+});
+test('parse voucher type counts', () => {
+  const xml = `<ENVELOPE>
+    <VOUCHER><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME></VOUCHER>
+    <VOUCHER><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME></VOUCHER>
+    <VOUCHER><VOUCHERTYPENAME>Payment</VOUCHERTYPENAME></VOUCHER>
+    <VOUCHER><VOUCHERTYPENAME>Purchase</VOUCHERTYPENAME></VOUCHER>
+    <VOUCHER><VOUCHERTYPENAME>Payment</VOUCHERTYPENAME></VOUCHER>
+    <VOUCHER><VOUCHERTYPENAME>Payment</VOUCHERTYPENAME></VOUCHER>
+  </ENVELOPE>`;
+  const counts = tdl.parseVoucherTypeCountsResponse(xml);
+  assert(counts.length === 3, `expected 3 types, got ${counts.length}`);
+  assert(counts[0].name === 'Payment' && counts[0].count === 3, 'Payment should be first with 3');
+  assert(counts[1].name === 'Sales' && counts[1].count === 2, 'Sales should be second with 2');
+});
+test('parse voucher type counts empty', () => {
+  const counts = tdl.parseVoucherTypeCountsResponse('<ENVELOPE></ENVELOPE>');
+  assert(counts.length === 0);
+});
+test('build order tracking XML with custom voucher type', () => {
+  const xml = tdl.buildOrderTrackingTdlXml('Co', 'Payment');
+  assert(xml.includes('"Payment"'), 'should use custom type name');
+});
+
+// ── Payment Reminders ──
+console.log('\nPayment Reminders:');
+const overdueBillsXml = (() => {
+  const now = new Date();
+  const fmt = (d) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+  const ago = (n) => { const d = new Date(now); d.setDate(d.getDate() - n); return fmt(d); };
+  const future = (n) => { const d = new Date(now); d.setDate(d.getDate() + n); return fmt(d); };
+  return `<ENVELOPE>
+    <BILL NAME="INV-001"><NAME>INV-001</NAME><PARENT>Party A</PARENT><CLOSINGBALANCE>-25000</CLOSINGBALANCE><FINALDUEDATE>${ago(30)}</FINALDUEDATE></BILL>
+    <BILL NAME="INV-002"><NAME>INV-002</NAME><PARENT>Party A</PARENT><CLOSINGBALANCE>-15000</CLOSINGBALANCE><FINALDUEDATE>${ago(10)}</FINALDUEDATE></BILL>
+    <BILL NAME="INV-003"><NAME>INV-003</NAME><PARENT>Party B</PARENT><CLOSINGBALANCE>-50000</CLOSINGBALANCE><FINALDUEDATE>${ago(60)}</FINALDUEDATE></BILL>
+    <BILL NAME="INV-004"><NAME>INV-004</NAME><PARENT>Party C</PARENT><CLOSINGBALANCE>-10000</CLOSINGBALANCE><FINALDUEDATE>${future(10)}</FINALDUEDATE></BILL>
+    <BILL NAME="INV-005"><NAME>INV-005</NAME><PARENT>Party D</PARENT><CLOSINGBALANCE>0</CLOSINGBALANCE><FINALDUEDATE>${ago(5)}</FINALDUEDATE></BILL>
+  </ENVELOPE>`;
+})();
+
+test('build overdue bills XML', () => {
+  const xml = tdl.buildOverdueBillsTdlXml('Co');
+  assert(xml.includes('OverdueBills'));
+});
+test('build party contacts XML', () => {
+  const xml = tdl.buildPartyContactsTdlXml('Co');
+  assert(xml.includes('PartyContacts') && xml.includes('Sundry Debtors'));
+});
+test('parse overdue bills filters future and zero', () => {
+  const { bills, parties } = tdl.parseOverdueBillsResponse(overdueBillsXml);
+  // INV-004 is future, INV-005 is zero → should be excluded
+  assert(bills.length === 3, `expected 3 overdue bills, got ${bills.length}`);
+  assert(parties.length === 2, `expected 2 parties, got ${parties.length}`);
+});
+test('parse overdue bills sorted by total', () => {
+  const { parties } = tdl.parseOverdueBillsResponse(overdueBillsXml);
+  assert(parties[0].name === 'Party B', `expected Party B first (50000), got ${parties[0].name}`);
+});
+test('parse party contacts', () => {
+  const contactsXml = `<ENVELOPE>
+    <LEDGER NAME="Party A"><NAME>Party A</NAME><LEDGERMOBILE>9876543210</LEDGERMOBILE><EMAIL>a@test.com</EMAIL><LEDGERCONTACT>Mr A</LEDGERCONTACT></LEDGER>
+    <LEDGER NAME="Party B"><NAME>Party B</NAME><LEDGERPHONE>0221234567</LEDGERPHONE></LEDGER>
+  </ENVELOPE>`;
+  const contacts = tdl.parsePartyContactsResponse(contactsXml);
+  assert(contacts['Party A'].phone === '9876543210');
+  assert(contacts['Party A'].email === 'a@test.com');
+  assert(contacts['Party B'].phone === '0221234567');
+});
+test('generate reminder message', () => {
+  const msg = tdl.generateReminderMessage('Test Co', {
+    name: 'Party A', totalDue: 40000,
+    bills: [{ billName: 'INV-001', amount: -25000, dueDate: '20260120', daysOverdue: 30 }],
+  });
+  assert(msg.includes('Party A') && msg.includes('40,000') && msg.includes('Test Co'));
+  assert(msg.includes('INV-001'));
+});
+test('format reminder summary', () => {
+  const { parties } = tdl.parseOverdueBillsResponse(overdueBillsXml);
+  const contacts = { 'Party A': { phone: '9876543210', email: '' }, 'Party B': { phone: '', email: '' } };
+  const result = tdl.formatReminderSummary(parties, contacts);
+  assert(result.success);
+  assert(result.data.reminders.length === 2);
+  assert(result.data.reminders[0].canSend === false, 'Party B has no phone'); // Party B is first (highest amount)
+  assert(result.message.includes('send reminders'));
+});
+test('format reminder summary empty', () => {
+  const result = tdl.formatReminderSummary([], {});
+  assert(result.success && result.message.includes('No overdue'));
+});
+
+// ── Voucher Create ──
+console.log('\nVoucher Create:');
+test('build create voucher XML sales', () => {
+  const xml = tdl.buildCreateVoucherXml({ type: 'Sales', party: 'Meril', amount: 50000, narration: 'Test invoice' }, 'Co');
+  assert(xml.includes('Import') && xml.includes('Sales') && xml.includes('Meril') && xml.includes('50000'));
+  assert(xml.includes('ACTION="Create"'));
+});
+test('build create voucher XML receipt', () => {
+  const xml = tdl.buildCreateVoucherXml({ type: 'Receipt', party: 'Meril', amount: 25000, cashLedger: 'HDFC Bank' }, 'Co');
+  assert(xml.includes('Receipt') && xml.includes('HDFC Bank') && xml.includes('25000'));
+});
+test('build create voucher XML payment', () => {
+  const xml = tdl.buildCreateVoucherXml({ type: 'Payment', party: 'Vendor', amount: 10000 }, 'Co');
+  assert(xml.includes('Payment') && xml.includes('Cash'));
+});
+test('build create voucher XML with items', () => {
+  const xml = tdl.buildCreateVoucherXml({
+    type: 'Sales', party: 'Meril', amount: 50000,
+    items: [{ name: 'Widget A', qty: 100, rate: 500 }],
+  }, 'Co');
+  assert(xml.includes('Widget A') && xml.includes('ALLINVENTORYENTRIES'));
+});
+test('parse create voucher response success', () => {
+  const xml = '<ENVELOPE><HEADER><STATUS>1</STATUS></HEADER><BODY><DATA><IMPORTRESULT><CREATED>1</CREATED><ALTERED>0</ALTERED><DELETED>0</DELETED><LASTVCHID>12345</LASTVCHID><LASTVCHNUMBER>INV-100</LASTVCHNUMBER><COMBINED><CREATED>1</CREATED><ERRORS>0</ERRORS></COMBINED></IMPORTRESULT></DATA></BODY></ENVELOPE>';
+  const r = tdl.parseCreateVoucherResponse(xml);
+  assert(r.success, 'should succeed');
+});
+test('parse create voucher response failure', () => {
+  const xml = '<ENVELOPE><HEADER><STATUS>1</STATUS></HEADER><BODY><DATA><IMPORTRESULT><CREATED>0</CREATED><ERRORS>1</ERRORS><LINEERROR>Ledger not found</LINEERROR></IMPORTRESULT></DATA></BODY></ENVELOPE>';
+  const r = tdl.parseCreateVoucherResponse(xml);
+  assert(!r.success, 'should fail');
+  assert(r.message.includes('Ledger not found'));
+});
+test('validate voucher data valid', () => {
+  const errors = tdl.validateVoucherData({ type: 'Sales', party: 'Meril', amount: 50000 });
+  assert(errors.length === 0, `expected no errors, got: ${errors.join(', ')}`);
+});
+test('validate voucher data missing party', () => {
+  const errors = tdl.validateVoucherData({ type: 'Sales', party: '', amount: 50000 });
+  assert(errors.length > 0 && errors.some(e => e.includes('Party')));
+});
+test('validate voucher data invalid type', () => {
+  const errors = tdl.validateVoucherData({ type: 'Invalid', party: 'X', amount: 100 });
+  assert(errors.length > 0 && errors.some(e => e.includes('type')));
+});
+test('validate voucher data zero amount', () => {
+  const errors = tdl.validateVoucherData({ type: 'Sales', party: 'X', amount: 0 });
+  assert(errors.length > 0 && errors.some(e => e.includes('Amount')));
+});
+test('validate voucher data bad items', () => {
+  const errors = tdl.validateVoucherData({ type: 'Sales', party: 'X', amount: 100, items: [{ name: '', qty: 0, rate: 0 }] });
+  assert(errors.length >= 2, `expected at least 2 item errors, got ${errors.length}`);
+});
+test('format voucher confirmation', () => {
+  const msg = tdl.formatVoucherConfirmation({ type: 'Sales', party: 'Meril', amount: 50000, date: '2026-02-20', narration: 'Test' }, 'INV-100');
+  assert(msg.includes('Sales Voucher Created') && msg.includes('Meril') && msg.includes('50,000') && msg.includes('INV-100'));
+});
+
 // ── Summary ──
-console.log(`\n${pass} passed, ${fail} failed out of ${pass + fail} tests`);
-process.exit(fail > 0 ? 1 : 0);
+// Wait for async tests (Excel export) to complete
+Promise.all(asyncTests).then(() => {
+  console.log(`\n${pass} passed, ${fail} failed out of ${pass + fail} tests`);
+  process.exit(fail > 0 ? 1 : 0);
+});

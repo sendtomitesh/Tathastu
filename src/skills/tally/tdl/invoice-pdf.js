@@ -45,7 +45,7 @@ function buildCompanyInfoTdlXml(companyName) {
       <TDL><TDLMESSAGE>
         <COLLECTION NAME="CompanyInfo" ISMODIFY="No">
           <TYPE>Company</TYPE>
-          <FETCH>Name, FormalName, Address.List, StateName, PinCode, PhoneNumber, Email, GSTIN, BasicCompanyMailName, BasicCompanyFormalName</FETCH>
+          <FETCH>Name, FormalName, Address.List, StateName, PinCode, PhoneNumber, Email, GSTIN, BasicCompanyMailName, BasicCompanyFormalName, BankDetails.List, BankName, AccountNumber, IFSCCode, BankBranchName</FETCH>
         </COLLECTION>
       </TDLMESSAGE></TDL>
     </DESC>
@@ -160,6 +160,12 @@ function parseCompanyInfoResponse(xmlString) {
     const line = decodeXml(am[1].trim());
     if (line) address.push(line);
   }
+  // Extract bank details
+  const bankName = extract('BANKNAME') || '';
+  const accountNumber = extract('ACCOUNTNUMBER') || '';
+  const ifscCode = extract('IFSCCODE') || '';
+  const bankBranch = extract('BANKBRANCHNAME') || '';
+
   return {
     name: extract('BASICCOMPANYFORMALNAME') || extract('NAME') || '',
     address,
@@ -168,6 +174,10 @@ function parseCompanyInfoResponse(xmlString) {
     pincode: extract('PINCODE') || '',
     gstin: extract('GSTIN') || '',
     phone: extract('PHONENUMBER') || '',
+    bankName,
+    accountNumber,
+    ifscCode,
+    bankBranch,
   };
 }
 
@@ -297,6 +307,17 @@ function generateInvoiceHtml(invoice, company, party) {
   else if (vchType.includes('receipt')) invoiceTitle = 'Receipt';
   else if (vchType.includes('payment')) invoiceTitle = 'Payment Voucher';
 
+  // Bank details section
+  let bankHtml = '';
+  if (company.bankName || company.accountNumber) {
+    const bankLines = [];
+    if (company.bankName) bankLines.push(`Bank: ${esc(company.bankName)}`);
+    if (company.accountNumber) bankLines.push(`A/c No: ${esc(company.accountNumber)}`);
+    if (company.ifscCode) bankLines.push(`IFSC: ${esc(company.ifscCode)}`);
+    if (company.bankBranch) bankLines.push(`Branch: ${esc(company.bankBranch)}`);
+    bankHtml = `<div style="margin-top:6px;"><label>Bank Details</label><div class="val">${bankLines.join('<br>')}</div></div>`;
+  }
+
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -383,6 +404,7 @@ function generateInvoiceHtml(invoice, company, party) {
   <div class="foot">
     <div class="foot-left">
       ${invoice.narration ? `<div class="narr">Narration: ${esc(invoice.narration)}</div>` : '<div class="narr">&nbsp;</div>'}
+      ${bankHtml}
     </div>
     <div class="foot-right">
       <div class="sign-label">For ${esc(company.name)}</div>

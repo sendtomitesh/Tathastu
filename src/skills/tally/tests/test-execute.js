@@ -768,6 +768,434 @@ async function runTests() {
     assert(r.message.includes('Page 2/2'), 'should show page 2/2');
   });
 
+  // ═══════════════════════════════════════════════
+  console.log('\nAction Routing — new features:');
+  // ═══════════════════════════════════════════════
+
+  await test('get_top_customers returns top customers', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    const salesXml = `<ENVELOPE>
+      <VOUCHER VCHTYPE="Sales"><DATE>20260219</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><VOUCHERNUMBER>S1</VOUCHERNUMBER><PARTYLEDGERNAME>Customer A</PARTYLEDGERNAME><AMOUNT>-50000</AMOUNT>
+        <ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>Widget</STOCKITEMNAME><RATE>100</RATE><AMOUNT>50000</AMOUNT><BILLEDQTY>500</BILLEDQTY></ALLINVENTORYENTRIES.LIST>
+      </VOUCHER>
+      <VOUCHER VCHTYPE="Sales"><DATE>20260219</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><VOUCHERNUMBER>S2</VOUCHERNUMBER><PARTYLEDGERNAME>Customer B</PARTYLEDGERNAME><AMOUNT>-30000</AMOUNT>
+        <ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>Widget</STOCKITEMNAME><RATE>100</RATE><AMOUNT>30000</AMOUNT><BILLEDQTY>300</BILLEDQTY></ALLINVENTORYENTRIES.LIST>
+      </VOUCHER>
+    </ENVELOPE>`;
+    mockResponses.postTally = async () => salesXml;
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'get_top_customers', {}, skillConfig);
+    assert(r.success, 'should succeed');
+    assert(r.data.entries.length === 2, `expected 2, got ${r.data.entries.length}`);
+    assert(r.data.entries[0].name === 'Customer A', 'Customer A should be first');
+  });
+
+  await test('get_top_suppliers routes as purchase', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    mockResponses.postTally = async () => '<ENVELOPE></ENVELOPE>';
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'get_top_suppliers', {}, skillConfig);
+    assert(r.success, 'should succeed (empty ok)');
+    const postCalls = calls.filter(c => c.fn === 'postTally');
+    assert(postCalls[0].xml.includes('"Purchase"'), 'should query Purchase type');
+  });
+
+  await test('get_top_items returns top items', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    const salesXml = `<ENVELOPE>
+      <VOUCHER VCHTYPE="Sales"><DATE>20260219</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><VOUCHERNUMBER>S1</VOUCHERNUMBER><PARTYLEDGERNAME>A</PARTYLEDGERNAME><AMOUNT>-50000</AMOUNT>
+        <ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>Widget A</STOCKITEMNAME><RATE>100</RATE><AMOUNT>50000</AMOUNT><BILLEDQTY>500</BILLEDQTY></ALLINVENTORYENTRIES.LIST>
+      </VOUCHER>
+    </ENVELOPE>`;
+    mockResponses.postTally = async () => salesXml;
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'get_top_items', {}, skillConfig);
+    assert(r.success, 'should succeed');
+    assert(r.data.entries.length === 1, 'should have 1 item');
+    assert(r.data.entries[0].name === 'Widget A');
+  });
+
+  await test('get_top_customers with limit', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    const salesXml = `<ENVELOPE>
+      <VOUCHER VCHTYPE="Sales"><DATE>20260219</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><VOUCHERNUMBER>S1</VOUCHERNUMBER><PARTYLEDGERNAME>A</PARTYLEDGERNAME><AMOUNT>-50000</AMOUNT></VOUCHER>
+      <VOUCHER VCHTYPE="Sales"><DATE>20260219</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><VOUCHERNUMBER>S2</VOUCHERNUMBER><PARTYLEDGERNAME>B</PARTYLEDGERNAME><AMOUNT>-30000</AMOUNT></VOUCHER>
+      <VOUCHER VCHTYPE="Sales"><DATE>20260219</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><VOUCHERNUMBER>S3</VOUCHERNUMBER><PARTYLEDGERNAME>C</PARTYLEDGERNAME><AMOUNT>-10000</AMOUNT></VOUCHER>
+    </ENVELOPE>`;
+    mockResponses.postTally = async () => salesXml;
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'get_top_customers', { limit: 2 }, skillConfig);
+    assert(r.success, 'should succeed');
+    assert(r.data.entries.length === 2, `expected 2, got ${r.data.entries.length}`);
+  });
+
+  await test('get_trial_balance returns trial balance', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    const tbXml = `<ENVELOPE>
+      <GROUP NAME="Current Assets"><NAME>Current Assets</NAME><PARENT>&#4; Primary</PARENT><OPENINGBALANCE>0</OPENINGBALANCE><CLOSINGBALANCE>100000</CLOSINGBALANCE></GROUP>
+      <GROUP NAME="Capital Account"><NAME>Capital Account</NAME><PARENT>&#4; Primary</PARENT><OPENINGBALANCE>0</OPENINGBALANCE><CLOSINGBALANCE>-100000</CLOSINGBALANCE></GROUP>
+    </ENVELOPE>`;
+    mockResponses.postTally = async () => tbXml;
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'get_trial_balance', {}, skillConfig);
+    assert(r.success, 'should succeed');
+    assert(r.data.groups.length === 2, `expected 2 groups, got ${r.data.groups.length}`);
+    assert(r.data.totalDebit === 100000, `expected debit 100000, got ${r.data.totalDebit}`);
+  });
+
+  await test('get_trial_balance ignores bad date range', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    mockResponses.postTally = async () => '<ENVELOPE><GROUP NAME="X"><NAME>X</NAME><PARENT>&#4; Primary</PARENT><OPENINGBALANCE>0</OPENINGBALANCE><CLOSINGBALANCE>1000</CLOSINGBALANCE></GROUP></ENVELOPE>';
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'get_trial_balance', { date_from: '2026-12-31', date_to: '2026-01-01' }, skillConfig);
+    assert(r.success, 'should succeed even with bad dates (they get nulled)');
+    // Verify SVFROMDATE is NOT in the XML (dates were nulled)
+    const postCalls = calls.filter(c => c.fn === 'postTally');
+    assert(!postCalls[0].xml.includes('SVFROMDATE'), 'should NOT include SVFROMDATE when dates are reversed');
+  });
+
+  await test('get_balance_sheet returns balance sheet', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    const bsXml = `<ENVELOPE>
+      <GROUP NAME="Current Assets"><NAME>Current Assets</NAME><PARENT>&#4; Primary</PARENT><CLOSINGBALANCE>200000</CLOSINGBALANCE></GROUP>
+      <GROUP NAME="Capital Account"><NAME>Capital Account</NAME><PARENT>&#4; Primary</PARENT><CLOSINGBALANCE>-200000</CLOSINGBALANCE></GROUP>
+      <GROUP NAME="Sales Accounts"><NAME>Sales Accounts</NAME><PARENT>&#4; Primary</PARENT><CLOSINGBALANCE>-500000</CLOSINGBALANCE></GROUP>
+    </ENVELOPE>`;
+    mockResponses.postTally = async () => bsXml;
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'get_balance_sheet', {}, skillConfig);
+    assert(r.success, 'should succeed');
+    assert(r.data.assets.length === 1, 'should have 1 asset group');
+    assert(r.data.liabilities.length === 1, 'should have 1 liability group');
+    // Sales Accounts should be excluded (P&L group)
+    const allNames = [...r.data.assets.map(a => a.name), ...r.data.liabilities.map(l => l.name)];
+    assert(!allNames.includes('Sales Accounts'), 'should exclude P&L groups');
+  });
+
+  await test('get_ageing_analysis receivable', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    const now = new Date();
+    const daysAgo = (n) => { const d = new Date(now); d.setDate(d.getDate() - n); return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`; };
+    const billXml = `<ENVELOPE>
+      <BILL NAME="B1"><NAME>B1</NAME><PARENT>Party A</PARENT><CLOSINGBALANCE>-10000</CLOSINGBALANCE><FINALDUEDATE>${daysAgo(15)}</FINALDUEDATE></BILL>
+      <BILL NAME="B2"><NAME>B2</NAME><PARENT>Party A</PARENT><CLOSINGBALANCE>-20000</CLOSINGBALANCE><FINALDUEDATE>${daysAgo(100)}</FINALDUEDATE></BILL>
+    </ENVELOPE>`;
+    mockResponses.postTally = async () => billXml;
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'get_ageing_analysis', { type: 'receivable' }, skillConfig);
+    assert(r.success, 'should succeed');
+    assert(r.data.totalBills === 2, `expected 2 bills, got ${r.data.totalBills}`);
+    assert(r.data.buckets[0].amount === 10000, '0-30 bucket should have 10000');
+    assert(r.data.buckets[3].amount === 20000, '90+ bucket should have 20000');
+  });
+
+  await test('get_ageing_analysis payable routes to Sundry Creditors', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    mockResponses.postTally = async () => '<ENVELOPE></ENVELOPE>';
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'get_ageing_analysis', { type: 'payable' }, skillConfig);
+    assert(r.success, 'should succeed (empty ok)');
+    assert(r.message.includes('No pending'), 'should say no pending bills');
+  });
+
+  // ═══════════════════════════════════════════════
+  console.log('\nAction Routing — Inactive Reports:');
+  // ═══════════════════════════════════════════════
+
+  await test('get_inactive_customers returns inactive parties', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    const now = new Date();
+    const ago = (n) => { const d = new Date(now); d.setDate(d.getDate() - n); return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`; };
+    const xml = `<ENVELOPE>
+      <VOUCHER VCHTYPE="Sales"><DATE>${ago(5)}</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><PARTYLEDGERNAME>Active</PARTYLEDGERNAME><AMOUNT>-10000</AMOUNT></VOUCHER>
+      <VOUCHER VCHTYPE="Sales"><DATE>${ago(60)}</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><PARTYLEDGERNAME>Dormant</PARTYLEDGERNAME><AMOUNT>-20000</AMOUNT></VOUCHER>
+    </ENVELOPE>`;
+    mockResponses.postTally = async () => xml;
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'get_inactive_customers', { days: 30 }, skillConfig);
+    assert(r.success, 'should succeed');
+    assert(r.data.entries.length === 1, `expected 1 inactive, got ${r.data.entries.length}`);
+    assert(r.data.entries[0].name === 'Dormant');
+  });
+
+  await test('get_inactive_suppliers routes as purchase', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    mockResponses.postTally = async () => '<ENVELOPE></ENVELOPE>';
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'get_inactive_suppliers', {}, skillConfig);
+    assert(r.success, 'should succeed');
+    const postCalls = calls.filter(c => c.fn === 'postTally');
+    assert(postCalls[0].xml.includes('"Purchase"'), 'should query Purchase type');
+  });
+
+  await test('get_inactive_items returns inactive items', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    const now = new Date();
+    const ago = (n) => { const d = new Date(now); d.setDate(d.getDate() - n); return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`; };
+    const xml = `<ENVELOPE>
+      <VOUCHER VCHTYPE="Sales"><DATE>${ago(100)}</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><PARTYLEDGERNAME>X</PARTYLEDGERNAME><AMOUNT>-5000</AMOUNT>
+        <ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>Dead Item</STOCKITEMNAME><AMOUNT>5000</AMOUNT></ALLINVENTORYENTRIES.LIST>
+      </VOUCHER>
+    </ENVELOPE>`;
+    mockResponses.postTally = async () => xml;
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'get_inactive_items', { days: 30 }, skillConfig);
+    assert(r.success, 'should succeed');
+    assert(r.data.entries.length === 1, `expected 1 inactive item, got ${r.data.entries.length}`);
+  });
+
+  // ═══════════════════════════════════════════════
+  console.log('\nAction Routing — Excel Export:');
+  // ═══════════════════════════════════════════════
+
+  await test('export_excel with no data returns error', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'export_excel', {}, skillConfig);
+    assert(!r.success, 'should fail without report data');
+    assert(r.message.includes('No report data'), 'should say no report data');
+  });
+
+  await test('export_excel with report data returns attachment', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    const execute = loadExecuteWithMock(mock);
+    const reportData = { entries: [{ name: 'Party A', closingBalance: -25000 }] };
+    const r = await execute('tally', 'export_excel', { _reportData: reportData, report_name: 'Outstanding' }, skillConfig);
+    assert(r.success, 'should succeed');
+    assert(r.attachment, 'should have attachment');
+    assert(r.attachment.filename === 'Outstanding.xlsx', `expected Outstanding.xlsx, got ${r.attachment.filename}`);
+    assert(Buffer.isBuffer(r.attachment.buffer), 'attachment should have buffer');
+  });
+
+  await test('export_excel with unknown data shape returns error', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'export_excel', { _reportData: { foo: 'bar' }, report_name: 'Unknown' }, skillConfig);
+    assert(!r.success, 'should fail for unknown shape');
+  });
+
+  // ═══════════════════════════════════════════════
+  console.log('\nAction Routing — Order Tracking:');
+  // ═══════════════════════════════════════════════
+
+  await test('get_sales_orders returns orders', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    const xml = `<ENVELOPE>
+      <VOUCHER VCHTYPE="Sales Order"><DATE>20260210</DATE><VOUCHERTYPENAME>Sales Order</VOUCHERTYPENAME><VOUCHERNUMBER>SO-001</VOUCHERNUMBER><PARTYLEDGERNAME>Customer A</PARTYLEDGERNAME><AMOUNT>-50000</AMOUNT><NARRATION>Test</NARRATION></VOUCHER>
+    </ENVELOPE>`;
+    mockResponses.postTally = async () => xml;
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'get_sales_orders', {}, skillConfig);
+    assert(r.success, 'should succeed');
+    assert(r.data.orders.length === 1, `expected 1 order, got ${r.data.orders.length}`);
+  });
+
+  await test('get_purchase_orders routes as purchase', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    let callNum = 0;
+    const countsXml = `<ENVELOPE>
+      <VOUCHER><VOUCHERTYPENAME>Payment</VOUCHERTYPENAME></VOUCHER>
+      <VOUCHER><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME></VOUCHER>
+    </ENVELOPE>`;
+    mockResponses.postTally = async () => { callNum++; return callNum === 1 ? '<ENVELOPE></ENVELOPE>' : countsXml; };
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'get_purchase_orders', {}, skillConfig);
+    assert(r.success, 'should succeed');
+    // Should show available voucher types since no Purchase Orders exist
+    assert(r.data.voucherTypes, 'should have voucherTypes');
+    assert(r.message.includes('Available voucher types'), 'should show available types');
+    const postCalls = calls.filter(c => c.fn === 'postTally');
+    assert(postCalls[0].xml.includes('Purchase Order'), 'first call should query Purchase Order type');
+  });
+
+  await test('get_sales_orders with custom voucher_type', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    const xml = `<ENVELOPE>
+      <VOUCHER VCHTYPE="Payment"><DATE>20260210</DATE><VOUCHERTYPENAME>Payment</VOUCHERTYPENAME><VOUCHERNUMBER>P-001</VOUCHERNUMBER><PARTYLEDGERNAME>Vendor A</PARTYLEDGERNAME><AMOUNT>10000</AMOUNT><NARRATION>Test</NARRATION></VOUCHER>
+    </ENVELOPE>`;
+    mockResponses.postTally = async () => xml;
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'get_sales_orders', { voucher_type: 'Payment' }, skillConfig);
+    assert(r.success, 'should succeed');
+    assert(r.data.orders.length === 1, `expected 1 order, got ${r.data.orders.length}`);
+    const postCalls = calls.filter(c => c.fn === 'postTally');
+    assert(postCalls[0].xml.includes('"Payment"'), 'should query Payment type');
+  });
+
+  await test('get_pending_orders computes pending', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    let callNum = 0;
+    const orderXml = `<ENVELOPE>
+      <VOUCHER VCHTYPE="Sales Order"><DATE>20260210</DATE><VOUCHERTYPENAME>Sales Order</VOUCHERTYPENAME><VOUCHERNUMBER>SO-001</VOUCHERNUMBER><PARTYLEDGERNAME>Customer A</PARTYLEDGERNAME><AMOUNT>-50000</AMOUNT></VOUCHER>
+    </ENVELOPE>`;
+    const invoiceXml = `<ENVELOPE>
+      <VOUCHER VCHTYPE="Sales"><DATE>20260212</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><PARTYLEDGERNAME>Customer A</PARTYLEDGERNAME><AMOUNT>-30000</AMOUNT></VOUCHER>
+    </ENVELOPE>`;
+    mockResponses.postTally = async () => { callNum++; return callNum === 1 ? orderXml : invoiceXml; };
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'get_pending_orders', {}, skillConfig);
+    assert(r.success, 'should succeed');
+    assert(r.data.pending.length === 1, `expected 1 pending, got ${r.data.pending.length}`);
+    assert(r.data.pending[0].pending === 20000, `expected 20000 pending, got ${r.data.pending[0].pending}`);
+  });
+
+  // ═══════════════════════════════════════════════
+  console.log('\nAction Routing — Payment Reminders:');
+  // ═══════════════════════════════════════════════
+
+  await test('get_payment_reminders returns overdue summary', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    const now = new Date();
+    const ago = (n) => { const d = new Date(now); d.setDate(d.getDate() - n); return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`; };
+    let callNum = 0;
+    const billXml = `<ENVELOPE>
+      <BILL NAME="INV-001"><NAME>INV-001</NAME><PARENT>Party A</PARENT><CLOSINGBALANCE>-25000</CLOSINGBALANCE><FINALDUEDATE>${ago(30)}</FINALDUEDATE></BILL>
+    </ENVELOPE>`;
+    const contactXml = `<ENVELOPE>
+      <LEDGER NAME="Party A"><NAME>Party A</NAME><LEDGERMOBILE>9876543210</LEDGERMOBILE></LEDGER>
+    </ENVELOPE>`;
+    mockResponses.postTally = async () => { callNum++; return callNum === 1 ? billXml : contactXml; };
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'get_payment_reminders', {}, skillConfig);
+    assert(r.success, 'should succeed');
+    assert(r.data.reminders.length === 1, `expected 1 reminder, got ${r.data.reminders.length}`);
+    assert(r.data.reminders[0].party === 'Party A');
+    assert(r.data.reminders[0].canSend === true, 'should be sendable (has phone)');
+  });
+
+  await test('get_payment_reminders no overdue', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    let callNum = 0;
+    mockResponses.postTally = async () => { callNum++; return callNum === 1 ? '<ENVELOPE></ENVELOPE>' : '<ENVELOPE></ENVELOPE>'; };
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'get_payment_reminders', {}, skillConfig);
+    assert(r.success, 'should succeed');
+    assert(r.message.includes('No overdue'), 'should say no overdue');
+  });
+
+  await test('send_reminder requires party_name', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'send_reminder', {}, skillConfig);
+    assert(!r.success, 'should fail');
+    assert(r.message.includes('specify a party'), 'should ask for party name');
+  });
+
+  await test('send_reminder returns reminder text', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    const now = new Date();
+    const ago = (n) => { const d = new Date(now); d.setDate(d.getDate() - n); return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`; };
+    let callNum = 0;
+    const searchXml = `<ENVELOPE><LEDGER NAME="Party A"><NAME>Party A</NAME><PARENT>Sundry Debtors</PARENT></LEDGER></ENVELOPE>`;
+    const billXml = `<ENVELOPE>
+      <BILL NAME="INV-001"><NAME>INV-001</NAME><PARENT>Party A</PARENT><CLOSINGBALANCE>-25000</CLOSINGBALANCE><FINALDUEDATE>${ago(30)}</FINALDUEDATE></BILL>
+    </ENVELOPE>`;
+    const partyXml = `<ENVELOPE><BODY><DATA><COLLECTION>
+      <LEDGER NAME="Party A" RESERVEDNAME=""><ADDRESS.LIST TYPE="String"><ADDRESS TYPE="String">Test</ADDRESS></ADDRESS.LIST><PARENT TYPE="String">Sundry Debtors</PARENT><LEDGERPHONE TYPE="String">9876543210</LEDGERPHONE></LEDGER>
+    </COLLECTION></DATA></BODY></ENVELOPE>`;
+    mockResponses.postTally = async () => { callNum++; if (callNum === 1) return searchXml; if (callNum === 2) return billXml; return partyXml; };
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'send_reminder', { party_name: 'Party A' }, skillConfig);
+    assert(r.success, 'should succeed');
+    assert(r.data.reminderText, 'should have reminder text');
+    assert(r.data.party === 'Party A');
+  });
+
+  // ═══════════════════════════════════════════════
+  console.log('\nAction Routing — Voucher Create:');
+  // ═══════════════════════════════════════════════
+
+  await test('create_voucher validates missing party', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'create_voucher', { voucher_type: 'Sales', amount: 50000 }, skillConfig);
+    assert(!r.success, 'should fail');
+    assert(r.message.includes('Party'), 'should mention party');
+  });
+
+  await test('create_voucher validates invalid type', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'create_voucher', { type: 'Invalid', party_name: 'X', amount: 100 }, skillConfig);
+    assert(!r.success, 'should fail');
+    assert(r.message.includes('type'), 'should mention type');
+  });
+
+  await test('create_voucher validates zero amount', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'create_voucher', { voucher_type: 'Sales', party_name: 'X', amount: 0 }, skillConfig);
+    assert(!r.success, 'should fail');
+    assert(r.message.includes('Amount'), 'should mention amount');
+  });
+
+  await test('create_voucher success', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    let callNum = 0;
+    const searchXml = `<ENVELOPE><LEDGER NAME="Meril"><NAME>Meril</NAME><PARENT>Sundry Debtors</PARENT></LEDGER></ENVELOPE>`;
+    const createResp = '<ENVELOPE><HEADER><STATUS>1</STATUS></HEADER><BODY><DATA><IMPORTRESULT><CREATED>1</CREATED><ERRORS>0</ERRORS></IMPORTRESULT></DATA></BODY></ENVELOPE>';
+    mockResponses.postTally = async () => { callNum++; return callNum === 1 ? searchXml : createResp; };
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'create_voucher', { voucher_type: 'Sales', party_name: 'Meril', amount: 50000, narration: 'Test' }, skillConfig);
+    assert(r.success, 'should succeed');
+    assert(r.message.includes('Voucher Created'), 'should confirm creation');
+  });
+
+  await test('create_voucher failure from Tally', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    let callNum = 0;
+    const searchXml = `<ENVELOPE><LEDGER NAME="Meril"><NAME>Meril</NAME><PARENT>Sundry Debtors</PARENT></LEDGER></ENVELOPE>`;
+    const createResp = '<ENVELOPE><HEADER><STATUS>1</STATUS></HEADER><BODY><DATA><IMPORTRESULT><CREATED>0</CREATED><ERRORS>1</ERRORS><LINEERROR>Ledger not found</LINEERROR></IMPORTRESULT></DATA></BODY></ENVELOPE>';
+    mockResponses.postTally = async () => { callNum++; return callNum === 1 ? searchXml : createResp; };
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'create_voucher', { voucher_type: 'Sales', party_name: 'Meril', amount: 50000 }, skillConfig);
+    assert(!r.success, 'should fail');
+    assert(r.message.includes('Ledger not found'), 'should show Tally error');
+  });
+
+  await test('create_voucher resolves party name', async () => {
+    const mock = mockTdl();
+    resetCalls(); resetMockResponses();
+    let callNum = 0;
+    const multiXml = `<ENVELOPE>
+      <LEDGER NAME="Meril Life Sciences"><NAME>Meril Life Sciences</NAME><PARENT>Sundry Debtors</PARENT></LEDGER>
+      <LEDGER NAME="Meril Pharma"><NAME>Meril Pharma</NAME><PARENT>Sundry Creditors</PARENT></LEDGER>
+    </ENVELOPE>`;
+    mockResponses.postTally = async () => multiXml;
+    const execute = loadExecuteWithMock(mock);
+    const r = await execute('tally', 'create_voucher', { voucher_type: 'Sales', party_name: 'Meril', amount: 50000 }, skillConfig);
+    assert(r.success, 'should succeed with suggestions');
+    assert(r.data.suggestions, 'should have suggestions');
+  });
+
   // ── Summary ──
   console.log(`\n${pass} passed, ${fail} failed out of ${pass + fail} tests`);
   process.exit(fail > 0 ? 1 : 0);

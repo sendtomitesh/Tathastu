@@ -29,6 +29,10 @@ function createOrchestrator(options = {}) {
   const conversationHistory = [];
   const MAX_HISTORY = 10; // Keep last 10 turns (5 user + 5 bot)
   
+  // Last report data for Excel export
+  let lastReportData = null;
+  let lastReportName = '';
+  
   // Initialize Sarvam translation client if enabled
   let sarvamClient = null;
   if (config.translation?.enabled && config.translation?.apiKey) {
@@ -311,11 +315,21 @@ function createOrchestrator(options = {}) {
             : "I didn't understand. " + getAvailableCommandsHelp(config);
         }
       } else {
+        // For export_excel, inject last report data
+        if (action === 'export_excel' && lastReportData) {
+          params._reportData = lastReportData;
+          if (!params.report_name) params.report_name = lastReportName;
+        }
         const result = await registry.execute(skillId, action, params);
         responseText = result.success
           ? (result.message || 'Done.')
           : (result.message || 'Action failed.');
         if (result.attachment) attachment = result.attachment;
+        // Store report data for potential Excel export
+        if (result.success && result.data && action !== 'export_excel') {
+          lastReportData = result.data;
+          lastReportName = action.replace(/^get_/, '').replace(/_/g, ' ');
+        }
       }
     } catch (err) {
       responseText = 'Error: ' + (err.message || String(err));

@@ -141,6 +141,86 @@
           "id": "open_company",
           "description": "Open a specific company in Tally. Use for 'open Mobibox', 'switch to Afflink', 'load company Mobibox'. Updates tally.ini and restarts Tally with that company.",
           "parameters": ["company_name"]
+        },
+        {
+          "id": "get_top_customers",
+          "description": "Get top customers by sales value. Use for 'top customers', 'best customers', 'who buys the most'. Defaults to current month. Supports limit (top 5/10/20).",
+          "parameters": ["date_from", "date_to", "limit"]
+        },
+        {
+          "id": "get_top_suppliers",
+          "description": "Get top suppliers by purchase value. Use for 'top suppliers', 'biggest vendors', 'who do we buy from most'. Defaults to current month.",
+          "parameters": ["date_from", "date_to", "limit"]
+        },
+        {
+          "id": "get_top_items",
+          "description": "Get top selling or purchased items by value. Use for 'top selling items', 'best selling products', 'most purchased items'. Use type=purchase for purchase items. Defaults to current month.",
+          "parameters": ["type", "date_from", "date_to", "limit"]
+        },
+        {
+          "id": "get_trial_balance",
+          "description": "Get trial balance showing all group-level debit and credit totals. Use for 'trial balance', 'TB'. Defaults to current FY.",
+          "parameters": ["date_from", "date_to"]
+        },
+        {
+          "id": "get_balance_sheet",
+          "description": "Get balance sheet showing assets and liabilities. Use for 'balance sheet', 'BS', 'assets and liabilities'. Defaults to current FY.",
+          "parameters": ["date_from", "date_to"]
+        },
+        {
+          "id": "get_ageing_analysis",
+          "description": "Get ageing analysis of outstanding bills in buckets (0-30, 31-60, 61-90, 90+ days). Use for 'ageing', 'aging analysis', 'overdue analysis', 'old dues'. Use type=receivable or type=payable.",
+          "parameters": ["type"]
+        },
+        {
+          "id": "get_inactive_customers",
+          "description": "Get customers who haven't ordered recently. Use for 'inactive customers', 'dormant customers', 'who stopped buying'. Default 30 days, use days=60/90 for longer.",
+          "parameters": ["days"]
+        },
+        {
+          "id": "get_inactive_suppliers",
+          "description": "Get suppliers with no recent purchases. Use for 'inactive suppliers', 'dormant vendors'.",
+          "parameters": ["days"]
+        },
+        {
+          "id": "get_inactive_items",
+          "description": "Get items not sold/purchased recently. Use for 'inactive items', 'slow moving items', 'dead stock'. Use type=purchase for purchase side.",
+          "parameters": ["type", "days"]
+        },
+        {
+          "id": "export_excel",
+          "description": "Export the last report as Excel file. Use for 'export excel', 'download excel', 'send as excel', 'excel report'. Must run a report first.",
+          "parameters": ["report_name"]
+        },
+        {
+          "id": "get_sales_orders",
+          "description": "Get sales orders or any voucher type. If no Sales Orders exist, shows available voucher types. Use voucher_type to query a specific type (e.g. 'Payment', 'Journal').",
+          "parameters": ["date_from", "date_to", "voucher_type"]
+        },
+        {
+          "id": "get_purchase_orders",
+          "description": "Get purchase orders or any voucher type. If no Purchase Orders exist, shows available voucher types. Use voucher_type to query a specific type.",
+          "parameters": ["date_from", "date_to", "voucher_type"]
+        },
+        {
+          "id": "get_pending_orders",
+          "description": "Get pending/unfulfilled orders by comparing orders vs invoices. Use for 'pending orders', 'unfulfilled orders', 'order status'. Use type=sales or type=purchase. Use voucher_type for custom types.",
+          "parameters": ["type", "date_from", "date_to", "voucher_type"]
+        },
+        {
+          "id": "get_payment_reminders",
+          "description": "Get list of parties with overdue payments and prepare reminders. Use for 'payment reminders', 'overdue reminders', 'remind customers', 'collection reminders'.",
+          "parameters": []
+        },
+        {
+          "id": "send_reminder",
+          "description": "Send payment reminder to a specific party. Use for 'send reminder to Meril', 'remind ABC about payment'. Shows reminder preview with party's phone number.",
+          "parameters": ["party_name"]
+        },
+        {
+          "id": "create_voucher",
+          "description": "Create a voucher in Tally (Sales Invoice, Purchase, Receipt, Payment). Use for 'create sales invoice for Meril 50000', 'record payment from ABC 25000', 'create receipt'. Party must exist in Tally.",
+          "parameters": ["voucher_type", "party_name", "amount", "date", "narration", "items", "ledger", "cash_ledger"]
         }
       ]
     }

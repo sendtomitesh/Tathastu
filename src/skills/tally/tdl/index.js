@@ -22,4 +22,13 @@ module.exports = {
   ...require('./party-invoices'),
   ...require('./invoice-pdf'),
   ...require('./tally-manager'),
+  ...require('./top-reports'),
+  ...require('./trial-balance'),
+  ...require('./balance-sheet'),
+  ...require('./ageing-analysis'),
+  ...require('./inactive-reports'),
+  ...require('./excel-export'),
+  ...require('./order-tracking'),
+  ...require('./payment-reminders'),
+  ...require('./voucher-create'),
 };

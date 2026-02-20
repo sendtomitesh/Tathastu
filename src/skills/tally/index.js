@@ -614,6 +614,312 @@ async function execute(skillId, action, params = {}, skillConfig = {}) {
     }
   }
 
+  if (action === 'get_top_customers' || action === 'get_top_suppliers' || action === 'get_top_items') {
+    const reportType = (action === 'get_top_suppliers' || (params.type && params.type.toLowerCase().includes('purchase'))) ? 'purchase' : 'sales';
+    let dateFrom = params.date_from ? tdlClient.toTallyDate(params.date_from) : null;
+    let dateTo = params.date_to ? tdlClient.toTallyDate(params.date_to) : null;
+    if (dateFrom && dateTo && dateFrom > dateTo) { dateFrom = null; dateTo = null; }
+    const limit = parseInt(params.limit, 10) || 10;
+    // JS-side date filtering only when user provides explicit dates
+    const actualFrom = dateFrom || null;
+    const actualTo = dateTo || (dateFrom ? dateFrom : null);
+    try {
+      const xml = tdlClient.buildTopReportTdlXml(companyName, reportType, dateFrom, dateTo);
+      const responseXml = await tdlClient.postTally(baseUrl, xml);
+      if (action === 'get_top_items') {
+        const parsed = tdlClient.parseTopItemsResponse(responseXml, reportType, limit, actualFrom, actualTo);
+        return { success: parsed.success, message: parsed.message, data: parsed.data };
+      } else {
+        const parsed = tdlClient.parseTopPartiesResponse(responseXml, reportType, limit, actualFrom, actualTo);
+        return { success: parsed.success, message: parsed.message, data: parsed.data };
+      }
+    } catch (err) {
+      return tallyError(err, port);
+    }
+  }
+
+  if (action === 'get_trial_balance') {
+    let dateFrom = params.date_from ? tdlClient.toTallyDate(params.date_from) : null;
+    let dateTo = params.date_to ? tdlClient.toTallyDate(params.date_to) : null;
+    if (dateFrom && dateTo && dateFrom > dateTo) { dateFrom = null; dateTo = null; }
+    try {
+      const xml = tdlClient.buildTrialBalanceTdlXml(companyName, dateFrom, dateTo);
+      const responseXml = await tdlClient.postTally(baseUrl, xml);
+      const parsed = tdlClient.parseTrialBalanceTdlResponse(responseXml, dateFrom, dateTo);
+      return { success: parsed.success, message: parsed.message, data: parsed.data };
+    } catch (err) {
+      return tallyError(err, port);
+    }
+  }
+
+  if (action === 'get_balance_sheet') {
+    let dateFrom = params.date_from ? tdlClient.toTallyDate(params.date_from) : null;
+    let dateTo = params.date_to ? tdlClient.toTallyDate(params.date_to) : null;
+    if (dateFrom && dateTo && dateFrom > dateTo) { dateFrom = null; dateTo = null; }
+    try {
+      const xml = tdlClient.buildBalanceSheetTdlXml(companyName, dateFrom, dateTo);
+      const responseXml = await tdlClient.postTally(baseUrl, xml);
+      const parsed = tdlClient.parseBalanceSheetTdlResponse(responseXml, dateFrom, dateTo);
+      return { success: parsed.success, message: parsed.message, data: parsed.data };
+    } catch (err) {
+      return tallyError(err, port);
+    }
+  }
+
+  if (action === 'get_ageing_analysis') {
+    const type = (params.type || 'receivable').toLowerCase();
+    let groupName;
+    if (type.includes('payab') || type.includes('creditor')) {
+      groupName = 'Sundry Creditors';
+    } else {
+      groupName = 'Sundry Debtors';
+    }
+    try {
+      const xml = tdlClient.buildAgeingAnalysisTdlXml(groupName, companyName);
+      const responseXml = await tdlClient.postTally(baseUrl, xml);
+      const parsed = tdlClient.parseAgeingAnalysisTdlResponse(responseXml, groupName);
+      return { success: parsed.success, message: parsed.message, data: parsed.data };
+    } catch (err) {
+      return tallyError(err, port);
+    }
+  }
+
+  if (action === 'get_inactive_customers' || action === 'get_inactive_suppliers') {
+    const reportType = action === 'get_inactive_suppliers' ? 'purchase' : 'sales';
+    const inactiveDays = parseInt(params.days, 10) || 30;
+    try {
+      const xml = tdlClient.buildInactiveReportTdlXml(companyName, reportType);
+      const responseXml = await tdlClient.postTally(baseUrl, xml);
+      const parsed = tdlClient.parseInactivePartiesResponse(responseXml, reportType, inactiveDays);
+      return { success: parsed.success, message: parsed.message, data: parsed.data };
+    } catch (err) {
+      return tallyError(err, port);
+    }
+  }
+
+  if (action === 'get_inactive_items') {
+    const reportType = (params.type && params.type.toLowerCase().includes('purchase')) ? 'purchase' : 'sales';
+    const inactiveDays = parseInt(params.days, 10) || 30;
+    try {
+      const xml = tdlClient.buildInactiveReportTdlXml(companyName, reportType);
+      const responseXml = await tdlClient.postTally(baseUrl, xml);
+      const parsed = tdlClient.parseInactiveItemsResponse(responseXml, reportType, inactiveDays);
+      return { success: parsed.success, message: parsed.message, data: parsed.data };
+    } catch (err) {
+      return tallyError(err, port);
+    }
+  }
+
+  if (action === 'export_excel') {
+    // Export the last report result as Excel. Requires lastReportData to be set.
+    // The orchestrator will pass the last report data via params._reportData
+    const reportData = params._reportData;
+    const reportName = params.report_name || 'Report';
+    if (!reportData) {
+      return { success: false, message: 'No report data to export. First run a report (e.g. "outstanding receivable", "expenses this month"), then say "export excel" or "download excel".' };
+    }
+    try {
+      const result = await tdlClient.reportToExcel(reportName, reportData);
+      if (!result) {
+        return { success: false, message: 'Could not convert this report to Excel. Try a different report.' };
+      }
+      return {
+        success: true,
+        message: `📊 Excel report ready: *${result.filename}*`,
+        data: reportData,
+        attachment: {
+          buffer: result.buffer,
+          filename: result.filename,
+          caption: reportName,
+        },
+      };
+    } catch (err) {
+      return { success: false, message: 'Excel export failed: ' + (err.message || String(err)) };
+    }
+  }
+
+  if (action === 'get_sales_orders' || action === 'get_purchase_orders') {
+    const voucherType = params.voucher_type || null; // allow custom voucher type
+    const orderType = voucherType
+      ? voucherType
+      : (action === 'get_purchase_orders' ? 'purchase' : 'sales');
+    let dateFrom = params.date_from ? tdlClient.toTallyDate(params.date_from) : null;
+    let dateTo = params.date_to ? tdlClient.toTallyDate(params.date_to) : null;
+    if (dateFrom && dateTo && dateFrom > dateTo) { dateFrom = null; dateTo = null; }
+    try {
+      const xml = tdlClient.buildOrderTrackingTdlXml(companyName, orderType, dateFrom, dateTo);
+      const responseXml = await tdlClient.postTally(baseUrl, xml);
+      const parsed = tdlClient.parseOrderTrackingResponse(responseXml, orderType, dateFrom, dateTo);
+      // If no results, show available voucher types so user can pick
+      if (parsed.data.orders.length === 0) {
+        const countsXml = tdlClient.buildVoucherTypeCountsTdlXml(companyName);
+        const countsResp = await tdlClient.postTally(baseUrl, countsXml);
+        const typeCounts = tdlClient.parseVoucherTypeCountsResponse(countsResp);
+        if (typeCounts.length > 0) {
+          const defaultType = orderType === 'purchase' ? 'Purchase Order' : orderType === 'sales' ? 'Sales Order' : orderType;
+          const lines = [`No *${defaultType}* vouchers found in this company.`, '', '📋 *Available voucher types:*', ''];
+          typeCounts.forEach((t, i) => {
+            lines.push(`${i + 1}. ${t.name} — ${t.count} vouchers`);
+          });
+          lines.push('', 'Reply with a voucher type name to see those entries.');
+          lines.push('Example: "show me all Payment vouchers"');
+          return { success: true, message: lines.join('\n'), data: { voucherTypes: typeCounts } };
+        }
+      }
+      return { success: parsed.success, message: parsed.message, data: parsed.data };
+    } catch (err) {
+      return tallyError(err, port);
+    }
+  }
+
+  if (action === 'get_pending_orders') {
+    const voucherType = params.voucher_type || null;
+    const orderType = voucherType
+      ? voucherType
+      : ((params.type && params.type.toLowerCase().includes('purchase')) ? 'purchase' : 'sales');
+    let dateFrom = params.date_from ? tdlClient.toTallyDate(params.date_from) : null;
+    let dateTo = params.date_to ? tdlClient.toTallyDate(params.date_to) : null;
+    if (dateFrom && dateTo && dateFrom > dateTo) { dateFrom = null; dateTo = null; }
+    try {
+      // Fetch orders
+      const orderXml = tdlClient.buildOrderTrackingTdlXml(companyName, orderType, dateFrom, dateTo);
+      const orderResp = await tdlClient.postTally(baseUrl, orderXml);
+      const ordersData = tdlClient.parseOrderTrackingResponse(orderResp, orderType, dateFrom, dateTo);
+      if (ordersData.data.orders.length === 0) {
+        // Show available voucher types
+        const countsXml = tdlClient.buildVoucherTypeCountsTdlXml(companyName);
+        const countsResp = await tdlClient.postTally(baseUrl, countsXml);
+        const typeCounts = tdlClient.parseVoucherTypeCountsResponse(countsResp);
+        if (typeCounts.length > 0) {
+          const defaultType = orderType === 'purchase' ? 'Purchase Order' : orderType === 'sales' ? 'Sales Order' : orderType;
+          const lines = [`No *${defaultType}* vouchers found.`, '', '📋 *Available voucher types:*', ''];
+          typeCounts.forEach((t, i) => lines.push(`${i + 1}. ${t.name} — ${t.count} vouchers`));
+          lines.push('', 'Reply with a voucher type name to track those.');
+          return { success: true, message: lines.join('\n'), data: { voucherTypes: typeCounts } };
+        }
+        return { success: true, message: ordersData.message, data: ordersData.data };
+      }
+      // Fetch invoices for comparison
+      const invXml = tdlClient.buildOrderFulfillmentTdlXml(companyName, orderType, dateFrom, dateTo);
+      const invResp = await tdlClient.postTally(baseUrl, invXml);
+      const parsed = tdlClient.computePendingOrders(ordersData.data, invResp, orderType, dateFrom, dateTo);
+      return { success: parsed.success, message: parsed.message, data: parsed.data };
+    } catch (err) {
+      return tallyError(err, port);
+    }
+  }
+
+  if (action === 'get_payment_reminders') {
+    try {
+      // Fetch overdue bills
+      const billXml = tdlClient.buildOverdueBillsTdlXml(companyName);
+      const billResp = await tdlClient.postTally(baseUrl, billXml);
+      const { parties } = tdlClient.parseOverdueBillsResponse(billResp);
+      // Fetch party contacts
+      const contactXml = tdlClient.buildPartyContactsTdlXml(companyName);
+      const contactResp = await tdlClient.postTally(baseUrl, contactXml);
+      const contacts = tdlClient.parsePartyContactsResponse(contactResp);
+      const result = tdlClient.formatReminderSummary(parties, contacts);
+      // Store reminder data for send_reminders action
+      result.data._companyName = companyName;
+      return result;
+    } catch (err) {
+      return tallyError(err, port);
+    }
+  }
+
+  if (action === 'send_reminder') {
+    // This action is handled by the orchestrator which has access to WhatsApp client
+    // We just prepare the data here
+    const partyName = params.party_name;
+    if (!partyName) {
+      return { success: false, message: 'Please specify a party name. Example: "send reminder to Meril"' };
+    }
+    try {
+      const resolved = await resolvePartyName(partyName, baseUrl, companyName);
+      if (resolved.match === 'none') return { success: false, message: `Party "${partyName}" not found in Tally.` };
+      if (resolved.match === 'multiple') return { success: true, message: formatSuggestions(resolved.suggestions, partyName), data: { suggestions: resolved.suggestions } };
+      // Fetch bills for this party
+      const billXml = tdlClient.buildBillOutstandingTdlXml(resolved.name, companyName);
+      const billResp = await tdlClient.postTally(baseUrl, billXml);
+      const billParsed = tdlClient.parseBillOutstandingTdlResponse(billResp, resolved.name);
+      if (!billParsed.data.bills || billParsed.data.bills.length === 0) {
+        return { success: true, message: `No pending bills for *${resolved.name}*. No reminder needed. ✅` };
+      }
+      // Fetch party contact
+      const partyXml = tdlClient.buildPartyDetailTdlXml(resolved.name, companyName);
+      const partyResp = await tdlClient.postTally(baseUrl, partyXml);
+      const partyDetail = tdlClient.parsePartyDetailResponse(partyResp);
+      const phone = partyDetail.phone || '';
+      // Generate reminder message
+      const today = new Date();
+      const todayStr = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
+      const overdueBills = billParsed.data.bills.filter(b => b.dueDate && b.dueDate < todayStr);
+      const partyData = {
+        name: resolved.name,
+        totalDue: Math.abs(billParsed.data.total),
+        bills: overdueBills.length > 0 ? overdueBills.map(b => ({
+          billName: b.name,
+          amount: b.closingBalance,
+          dueDate: b.dueDate,
+          daysOverdue: Math.floor((today.getTime() - new Date(parseInt(b.dueDate.slice(0,4)), parseInt(b.dueDate.slice(4,6))-1, parseInt(b.dueDate.slice(6,8))).getTime()) / 86400000),
+        })) : billParsed.data.bills.map(b => ({
+          billName: b.name,
+          amount: b.closingBalance,
+          dueDate: b.dueDate || '',
+          daysOverdue: 0,
+        })),
+        maxDaysOverdue: 0,
+      };
+      const reminderText = tdlClient.generateReminderMessage(companyName, partyData);
+      return {
+        success: true,
+        message: `📨 *Reminder for ${resolved.name}:*\n\n${reminderText}\n\n${phone ? `📱 Phone: ${phone}` : '❌ No phone number in Tally'}`,
+        data: { party: resolved.name, phone, reminderText, totalDue: partyData.totalDue },
+        _sendReminder: phone ? { phone, text: reminderText } : null,
+      };
+    } catch (err) {
+      return tallyError(err, port);
+    }
+  }
+
+  if (action === 'create_voucher') {
+    const voucherData = {
+      type: params.voucher_type || params.type || 'Sales',
+      party: params.party_name,
+      amount: parseFloat(params.amount) || 0,
+      date: params.date || null,
+      narration: params.narration || '',
+      items: params.items || [],
+      salesLedger: params.ledger || null,
+      cashLedger: params.cash_ledger || null,
+    };
+    // Validate
+    const errors = tdlClient.validateVoucherData(voucherData);
+    if (errors.length > 0) {
+      return { success: false, message: '❌ Cannot create voucher:\n' + errors.map(e => '• ' + e).join('\n') };
+    }
+    // Resolve party name
+    try {
+      const resolved = await resolvePartyName(voucherData.party, baseUrl, companyName);
+      if (resolved.match === 'none') return { success: false, message: `Party "${voucherData.party}" not found in Tally. The party ledger must exist in Tally first.` };
+      if (resolved.match === 'multiple') return { success: true, message: formatSuggestions(resolved.suggestions, voucherData.party), data: { suggestions: resolved.suggestions } };
+      voucherData.party = resolved.name;
+      // Build and send XML
+      const xml = tdlClient.buildCreateVoucherXml(voucherData, companyName);
+      const responseXml = await tdlClient.postTally(baseUrl, xml);
+      const result = tdlClient.parseCreateVoucherResponse(responseXml);
+      if (result.success) {
+        const msg = tdlClient.formatVoucherConfirmation(voucherData, result.voucherNumber);
+        return { success: true, message: msg, data: { voucherData, voucherNumber: result.voucherNumber } };
+      } else {
+        return { success: false, message: '❌ Voucher creation failed: ' + (result.message || 'Unknown error. Check that all ledger names exist in Tally.') };
+      }
+    } catch (err) {
+      return tallyError(err, port);
+    }
+  }
+
   return { success: false, message: 'Unknown Tally action: ' + action };
 }
 

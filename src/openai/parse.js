@@ -1,5 +1,14 @@
 const OpenAI = require('openai');
+const fs = require('fs');
+const path = require('path');
 const { getActionsForPrompt } = require('../config/load');
+
+// Load local knowledge base once at startup
+let _knowledgeBase = '';
+try {
+  const kbPath = path.join(__dirname, '..', '..', 'config', 'knowledge.md');
+  _knowledgeBase = fs.readFileSync(kbPath, 'utf-8').trim();
+} catch { /* no knowledge base file — that's fine */ }
 
 /**
  * Build a friendly capabilities message for the user.
@@ -22,6 +31,15 @@ function getCapabilitiesMessage() {
     '📄 *Bill Outstanding* — "Pending bills for Meril", "Unpaid invoices"',
     '📃 *List Ledgers* — "List all ledgers", "Show bank accounts"',
     '🔍 *GSTIN* — "GSTIN of Meril", "GST number for ABC"',
+    '🏆 *Top Reports* — "Top customers", "Top selling items", "Top suppliers"',
+    '📋 *Trial Balance* — "Trial balance", "Show TB"',
+    '🏦 *Balance Sheet* — "Balance sheet", "Assets and liabilities"',
+    '⏳ *Ageing Analysis* — "Ageing receivable", "Overdue analysis"',
+    '😴 *Inactive Reports* — "Inactive customers", "Dormant suppliers", "Slow items"',
+    '📋 *Orders* — "Sales orders", "Purchase orders", "Pending orders"',
+    '📨 *Payment Reminders* — "Payment reminders", "Remind Meril about payment"',
+    '✏️ *Create Voucher* — "Create sales invoice for Meril 50000", "Record receipt from ABC"',
+    '📊 *Excel Export* — "Export excel" (after any report)',
     '🖥️ *Tally Control* — "Tally status", "Restart tally", "Open Mobibox", "List companies"',
     '',
     'Just type naturally or send a voice note — I understand Hindi, Gujarati, English & more! 🎙️'
@@ -63,6 +81,15 @@ function buildSystemPrompt(config) {
     '- List ledgers',
     '- GSTIN lookup',
     '- Tally status, restart, start, list companies',
+    '- Top customers, suppliers, items',
+    '- Trial Balance',
+    '- Balance Sheet',
+    '- Ageing analysis (overdue buckets)',
+    '- Inactive customers, suppliers, items',
+    '- Sales/Purchase orders and pending orders',
+    '- Payment reminders for overdue parties',
+    '- Create vouchers (Sales, Purchase, Receipt, Payment)',
+    '- Export any report as Excel',
     'Give 1-2 example queries. Keep it under 150 words. Use emojis sparingly.',
     'If the message is unclear (not a greeting, not matching any action), politely say you didn\'t understand and list 2-3 example queries they can try.',
     '',
@@ -77,9 +104,18 @@ function buildSystemPrompt(config) {
   const now = new Date();
   const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   lines.push(`Today's date is ${todayStr}. Use this to resolve relative dates like "yesterday", "last week", "this month", "last 7 days", etc. into actual YYYY-MM-DD values for date_from and date_to.`);
-  lines.push('IMPORTANT: For get_profit_loss, get_expense_report, and get_gst_summary — ONLY set date_from/date_to if the user EXPLICITLY mentions a date or period (e.g. "last month", "this quarter", "Jan to Mar"). If the user just says "p&l" or "profit loss" or "expenses" without any date, set date_from and date_to to null. Tally will use the company\'s own financial year which is always correct.');
+  lines.push('IMPORTANT: For get_profit_loss, get_expense_report, get_gst_summary, get_trial_balance, and get_balance_sheet — ONLY set date_from/date_to if the user EXPLICITLY mentions a date or period (e.g. "last month", "this quarter", "Jan to Mar"). If the user just says "p&l" or "trial balance" or "balance sheet" without any date, set date_from and date_to to null. Tally will use the company\'s own financial year which is always correct.');
   lines.push('Extract parameter values from the user message. Use null for missing optional params. For dates use YYYY-MM-DD or YYYYMMDD. For limit use a number.');
   lines.push('PAGINATION: When the user says "more", "next", "next page", "page 2", "show more", "aur dikhao", "aage", repeat the SAME action with the same params but add page=N (next page number). Look at conversation history to find which action was last used and what page was shown.');
+  lines.push('VOUCHER TYPE SELECTION: When the bot previously showed a list of available voucher types (e.g. "1. Sales — 32 vouchers, 2. Payment — 1433 vouchers") and the user replies with a voucher type name (e.g. "Payment", "Sales", "Journal") or a number from that list, use get_sales_orders with voucher_type set to that type name. For example, if user says "show me Payment vouchers" or just "Payment", return get_sales_orders with voucher_type="Payment".');
+  // Inject local knowledge base if available
+  if (_knowledgeBase) {
+    lines.push('');
+    lines.push('=== DOMAIN KNOWLEDGE BASE ===');
+    lines.push('Use the following knowledge to better understand user queries, especially in Hindi/Gujarati, accounting terms, and common abbreviations:');
+    lines.push(_knowledgeBase);
+    lines.push('=== END KNOWLEDGE BASE ===');
+  }
   return lines.join('\n');
 }
 
