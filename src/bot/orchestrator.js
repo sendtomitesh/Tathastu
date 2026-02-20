@@ -1,7 +1,7 @@
 const { loadConfig } = require('../config/load');
 const { SkillRegistry } = require('../skills');
-const { parseIntent, getAvailableCommandsHelp } = require('../openai/parse');
-const { reply } = require('../whatsapp/client');
+const { parseIntent, getAvailableCommandsHelp, getCapabilitiesMessage } = require('../openai/parse');
+const { reply, sendDocument } = require('../whatsapp/client');
 const { SarvamClient } = require('../translation/sarvam');
 
 /**
@@ -43,13 +43,12 @@ function createOrchestrator(options = {}) {
     }
   }
 
-  // Ignore our own replies: message_create fires for our sent messages too. Use a time window.
-  let lastSentAt = 0;
-  let lastSentText = null; // Track last sent message text to avoid processing our own replies
+  // Bot reply prefix — every bot message starts with this so we can identify echoes instantly
+  const BOT_PREFIX = '*Tathastu:*\n';
+
   // Track last *user* message to avoid processing duplicates (e.g. from multiple linked devices)
   let lastUserText = null;
   let lastUserAt = 0;
-  const ECHO_IGNORE_MS = 10000; // ignore fromMe messages within 10s of us sending (our echo)
   const DUPLICATE_USER_MS = 5000; // ignore duplicate user messages with same text within 5s
   let myNumber = null; // Cache user's own number
 
@@ -76,24 +75,10 @@ function createOrchestrator(options = {}) {
       return;
     }
 
-    // 2) Ignore our own echo: right after we send a reply, message_create fires for that reply.
-    const timeSinceLastSend = Date.now() - lastSentAt;
+    // 2) Ignore bot echoes: our replies start with BOT_PREFIX, so skip them instantly
     const messageBody = (message.body || '').trim();
-    const messageId = message.id?._serialized || message.id || message.timestamp;
-    
-    // CRITICAL: If message text matches what we just sent, it's definitely our echo - skip immediately
-    if (message.fromMe && lastSentText) {
-      const sentTextTrimmed = lastSentText.trim();
-      if (messageBody === sentTextTrimmed) {
-        onLog('Skip: echo (matches last sent message: "' + (messageBody.slice(0, 30) + '...') + '")');
-        return;
-      }
-    }
-    
-    // AGGRESSIVE: If we just sent something and this is fromMe within echo window, skip it
-    // This catches bot replies that come through before text matching works
-    if (message.fromMe && lastSentAt > 0 && timeSinceLastSend < ECHO_IGNORE_MS) {
-      onLog('Skip: echo (fromMe message within ' + timeSinceLastSend + 'ms of our reply)');
+    if (message.fromMe && messageBody.startsWith('*Tathastu:*')) {
+      onLog('Skip: bot echo (has Tathastu prefix)');
       return;
     }
 
@@ -288,9 +273,8 @@ function createOrchestrator(options = {}) {
       isSelfChat = message.fromMe && !chat.isGroup;
     }
 
-    // Store user message if it's a self-chat AND it's not our own echo
-    // Only store if it's actually from the user (not a bot reply that got through)
-    if (isSelfChat && !(lastSentText && userText === lastSentText && timeSinceLastSend < ECHO_IGNORE_MS)) {
+    // Store user message if it's a self-chat
+    if (isSelfChat) {
       const userMessage = {
         id: 'user_' + Date.now(),
         type: 'user',
@@ -313,17 +297,25 @@ function createOrchestrator(options = {}) {
     const SUPPORTED_LANGS = ['en-IN', 'en', 'hi-IN', 'gu-IN'];
 
     let responseText;
+    let attachment = null;
     try {
       const { skillId, action, params, suggestedReply } = await parseIntent(textForProcessing, config, process.env.OPENAI_API_KEY, conversationHistory);
       if (skillId == null || action === 'unknown') {
-        responseText = (suggestedReply && suggestedReply.length > 0)
-          ? suggestedReply
-          : "I didn't understand. " + getAvailableCommandsHelp(config);
+        // For greetings, always use our curated capabilities message
+        const isGreeting = /^(hi|hello|hey|hiya|good\s*morning|good\s*evening|good\s*afternoon|gm|sup|namaste|namaskar)\b/i.test(textForProcessing.trim());
+        if (isGreeting) {
+          responseText = "Hey! 👋 Welcome to *Tathastu*.\n\n" + getCapabilitiesMessage();
+        } else {
+          responseText = (suggestedReply && suggestedReply.length > 0)
+            ? suggestedReply
+            : "I didn't understand. " + getAvailableCommandsHelp(config);
+        }
       } else {
         const result = await registry.execute(skillId, action, params);
         responseText = result.success
           ? (result.message || 'Done.')
           : (result.message || 'Action failed.');
+        if (result.attachment) attachment = result.attachment;
       }
     } catch (err) {
       responseText = 'Error: ' + (err.message || String(err));
@@ -353,16 +345,24 @@ function createOrchestrator(options = {}) {
       }
     }
 
-    // Set lastSentText BEFORE sending to catch echo immediately
-    lastSentText = finalResponseText;
-    const sendStartTime = Date.now();
+    // Add bot prefix to the final response so echoes are identifiable
+    const prefixedResponse = BOT_PREFIX + finalResponseText;
     
     try {
-      await reply(message, finalResponseText);
-      lastSentAt = sendStartTime; // Use the time we started sending, not when it completes
+      await reply(message, prefixedResponse);
       onLog('Replied ok');
       
-      // Store bot reply message
+      // Send attachment (PDF, etc.) if present
+      if (attachment && attachment.buffer) {
+        try {
+          await sendDocument(message, attachment.buffer, attachment.filename, attachment.caption || '');
+          onLog('Attachment sent: ' + attachment.filename);
+        } catch (attErr) {
+          onLog('Attachment send failed: ' + (attErr.message || attErr));
+        }
+      }
+      
+      // Store bot reply message (without prefix for clean display)
       const botMessage = {
         id: 'bot_' + Date.now(),
         type: 'bot',

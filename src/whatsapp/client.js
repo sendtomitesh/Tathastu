@@ -19,6 +19,24 @@ function createClient(options = {}) {
       '--disable-gpu',
       '--disable-dev-shm-usage',
       '--no-first-run',
+      '--no-zygote',
+      '--disable-extensions',
+      '--disable-background-networking',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-breakpad',
+      '--disable-component-update',
+      '--disable-default-apps',
+      '--disable-hang-monitor',
+      '--disable-ipc-flooding-protection',
+      '--disable-popup-blocking',
+      '--disable-prompt-on-repost',
+      '--disable-renderer-backgrounding',
+      '--disable-sync',
+      '--disable-translate',
+      '--metrics-recording-only',
+      '--no-default-browser-check',
+      '--password-store=basic',
     ],
   };
   // Use system Chrome when PUPPETEER_SKIP_DOWNLOAD was used (e.g. Windows)
@@ -29,6 +47,8 @@ function createClient(options = {}) {
   const client = new Client({
     authStrategy: new LocalAuth({ dataPath }),
     puppeteer: puppeteerOpts,
+    // Use cached WhatsApp Web version to skip version check on startup
+    webVersionCache: { type: 'local' },
   });
 
   // Verbose lifecycle logging so we can see what's happening
@@ -82,8 +102,28 @@ async function reply(message, text) {
   }
 }
 
+/**
+ * Send a document/file to the same chat.
+ * @param {import('whatsapp-web.js').Message} message - Original message (to get chat)
+ * @param {Buffer} buffer - File content as Buffer
+ * @param {string} filename - Filename with extension (e.g. 'invoice.pdf')
+ * @param {string} [caption] - Optional caption text
+ */
+async function sendDocument(message, buffer, filename, caption) {
+  const { MessageMedia } = require('whatsapp-web.js');
+  const base64 = buffer.toString('base64');
+  // Determine mimetype from extension
+  const ext = filename.split('.').pop().toLowerCase();
+  const mimeMap = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+  const mimetype = mimeMap[ext] || 'application/octet-stream';
+  const media = new MessageMedia(mimetype, base64, filename);
+  const chat = await message.getChat();
+  return await chat.sendMessage(media, { caption: caption || '', sendMediaAsDocument: true });
+}
+
 module.exports = {
   createClient,
   initialize,
   reply,
+  sendDocument,
 };

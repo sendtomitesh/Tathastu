@@ -1,2 +1,19 @@
 {
+  "files.exclude": {
+    ".wwebjs_auth": true,
+    ".wwebjs_cache": true,
+    "node_modules": true,
+    "dist": true
+  },
+  "files.watcherExclude": {
+    ".wwebjs_auth/**": true,
+    ".wwebjs_cache/**": true,
+    "node_modules/**": true,
+    "dist/**": true
+  },
+  "search.exclude": {
+    ".wwebjs_auth": true,
+    ".wwebjs_cache": true,
+    "node_modules": true
+  }
 }

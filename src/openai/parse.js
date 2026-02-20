@@ -2,14 +2,30 @@ const OpenAI = require('openai');
 const { getActionsForPrompt } = require('../config/load');
 
 /**
- * Build a short hint of what the user can ask (for suggestedReply instruction).
+ * Build a friendly capabilities message for the user.
  */
-function getCapabilitiesHint(config) {
-  const parts = (config.skills || []).map((s) => {
-    const actions = (s.actions || []).map((a) => a.id).slice(0, 3);
-    return actions.length ? `${s.name}: ${actions.join(', ')}` : s.name;
-  });
-  return parts.length ? parts.join('; ') : 'connected services';
+function getCapabilitiesMessage() {
+  return [
+    "Here's what I can help you with:",
+    '',
+    '📒 *Ledger* — "Ledger for Meril", "Statement of Atul"',
+    '💰 *Balance* — "Balance of Google Cloud", "What does Meril owe?"',
+    '🧾 *Vouchers* — "Show today\'s vouchers", "Sales vouchers this week"',
+    '📋 *Day Book* — "Today\'s daybook", "Daybook for yesterday"',
+    '📊 *Sales/Purchase Report* — "Sales this month", "Purchase report for January"',
+    '📑 *Outstanding* — "Outstanding receivable", "What do we owe?"',
+    '🏦 *Cash & Bank* — "Bank balance", "Cash in hand"',
+    '📈 *Profit & Loss* — "P&L this year", "Are we profitable?"',
+    '💸 *Expenses* — "Expenses this month", "Where is money going?"',
+    '📦 *Stock* — "Stock summary", "Stock of Widget A"',
+    '🧾 *GST Summary* — "GST this month", "Tax liability"',
+    '📄 *Bill Outstanding* — "Pending bills for Meril", "Unpaid invoices"',
+    '📃 *List Ledgers* — "List all ledgers", "Show bank accounts"',
+    '🔍 *GSTIN* — "GSTIN of Meril", "GST number for ABC"',
+    '🖥️ *Tally Control* — "Tally status", "Restart tally", "Open Mobibox", "List companies"',
+    '',
+    'Just type naturally or send a voice note — I understand Hindi, Gujarati, English & more! 🎙️'
+  ].join('\n');
 }
 
 /**
@@ -17,7 +33,6 @@ function getCapabilitiesHint(config) {
  */
 function buildSystemPrompt(config) {
   const actions = getActionsForPrompt(config);
-  const capabilitiesHint = getCapabilitiesHint(config);
   const lines = [
     'You are a helpful assistant that runs commands across connected services (e.g. accounting, CRM, tools). The user sends a message.',
     'Return ONLY valid JSON, no markdown or explanation.',
@@ -33,7 +48,23 @@ function buildSystemPrompt(config) {
     'If the message does NOT match any action (greeting, question, unclear, or off-topic), return:',
     '{"skillId":null,"action":"unknown","params":{},"suggestedReply":"Your brief friendly reply here."}',
     '',
-    `For suggestedReply: write 1-2 short sentences. Be conversational. If they said hello, greet back. If unclear, politely say what you can do and mention they can ask about: ${capabilitiesHint}. Keep it under 100 words.`,
+    `For suggestedReply when the user says hello/hi: greet them warmly and list what you can do in a friendly way. Include these capabilities:`,
+    '- Ledger/Statement for a party',
+    '- Balance (receivable/payable) for a party',
+    '- Today\'s vouchers or daybook',
+    '- Sales or Purchase report',
+    '- Outstanding receivable or payable',
+    '- Cash & Bank balances',
+    '- Profit & Loss summary',
+    '- Expense report',
+    '- Stock/Inventory summary',
+    '- GST tax summary',
+    '- Bill outstanding for a party',
+    '- List ledgers',
+    '- GSTIN lookup',
+    '- Tally status, restart, start, list companies',
+    'Give 1-2 example queries. Keep it under 150 words. Use emojis sparingly.',
+    'If the message is unclear (not a greeting, not matching any action), politely say you didn\'t understand and list 2-3 example queries they can try.',
     '',
     'Available actions (skillId, action, parameters):',
   ];
@@ -46,7 +77,9 @@ function buildSystemPrompt(config) {
   const now = new Date();
   const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   lines.push(`Today's date is ${todayStr}. Use this to resolve relative dates like "yesterday", "last week", "this month", "last 7 days", etc. into actual YYYY-MM-DD values for date_from and date_to.`);
+  lines.push('IMPORTANT: For get_profit_loss, get_expense_report, and get_gst_summary — ONLY set date_from/date_to if the user EXPLICITLY mentions a date or period (e.g. "last month", "this quarter", "Jan to Mar"). If the user just says "p&l" or "profit loss" or "expenses" without any date, set date_from and date_to to null. Tally will use the company\'s own financial year which is always correct.');
   lines.push('Extract parameter values from the user message. Use null for missing optional params. For dates use YYYY-MM-DD or YYYYMMDD. For limit use a number.');
+  lines.push('PAGINATION: When the user says "more", "next", "next page", "page 2", "show more", "aur dikhao", "aage", repeat the SAME action with the same params but add page=N (next page number). Look at conversation history to find which action was last used and what page was shown.');
   return lines.join('\n');
 }
 
@@ -126,13 +159,13 @@ async function parseWithOllama(userMessage, config, history = []) {
 function parseWithKeyword(userMessage, config) {
   const text = (userMessage || '').trim().toLowerCase();
   const actions = getActionsForPrompt(config);
-  const defaultReply = "I can help with: " + getCapabilitiesHint(config) + ". Say something like 'get ledger of ABC' or 'list ledgers'.";
+  const defaultReply = getCapabilitiesMessage();
 
   if (!text) return { skillId: null, action: 'unknown', params: {}, suggestedReply: defaultReply };
 
   // Greetings
   if (/^(hi|hello|hey|hiya|good morning|good evening|gm|sup)\s*!?\.?$/i.test(text))
-    return { skillId: null, action: 'unknown', params: {}, suggestedReply: "Hi! You can ask me for ledgers, vouchers, or to list ledgers. What do you need?" };
+    return { skillId: null, action: 'unknown', params: {}, suggestedReply: "Hey! 👋 Welcome to Tathastu.\n\n" + defaultReply };
 
   // get_ledger: "ledger of X", "get ledger for X", "statement of X"
   const ledgerMatch = text.match(/(?:get\s+)?(?:ledger|statement)\s+(?:of|for)\s+(.+?)(?:\s*\.|$)/i) || text.match(/ledger\s+(.+?)(?:\s*\.|$)/i);
@@ -193,7 +226,7 @@ function getAvailableCommandsHelp(config) {
 
 module.exports = {
   buildSystemPrompt,
-  getCapabilitiesHint,
+  getCapabilitiesMessage,
   parseIntent,
   getAvailableCommandsHelp,
   getProvider,

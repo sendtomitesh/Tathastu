@@ -44,9 +44,10 @@
         },
         {
           "id": "list_ledgers",
-          "description": "List ledgers, optionally filtered by group (e.g. Sundry Debtors, Bank Accounts)",
+          "description": "List ledgers, optionally filtered by group (e.g. Sundry Debtors, Bank Accounts). Supports pagination — use page=2, page=3 etc. when user says 'more', 'next', 'page 2'.",
           "parameters": [
-            "group_filter"
+            "group_filter",
+            "page"
           ]
         },
         {
@@ -65,19 +66,81 @@
         },
         {
           "id": "get_outstanding",
-          "description": "Get outstanding payable or receivable report. Use type=payable for what we owe, type=receivable for what others owe us",
+          "description": "Get outstanding payable or receivable report. Use type=payable for what we owe, type=receivable for what others owe us. Supports pagination.",
           "parameters": [
-            "type"
+            "type",
+            "page"
           ]
         },
         {
           "id": "get_sales_report",
-          "description": "Get sales or purchase report with party-wise breakdown. Use type=sales or type=purchase. Defaults to current month. Use for 'show sales this month', 'total purchases in January', 'sales report'.",
-          "parameters": [
-            "type",
-            "date_from",
-            "date_to"
-          ]
+          "description": "Get sales or purchase report with party-wise breakdown. Use type=sales or type=purchase. Defaults to current month.",
+          "parameters": ["type", "date_from", "date_to"]
+        },
+        {
+          "id": "get_cash_bank_balance",
+          "description": "Get cash and bank balances. Use for 'bank balance', 'cash in hand', 'how much money do we have'.",
+          "parameters": []
+        },
+        {
+          "id": "get_profit_loss",
+          "description": "Get profit and loss summary. Use for 'P&L', 'profit loss', 'are we profitable'. Defaults to current FY.",
+          "parameters": ["date_from", "date_to"]
+        },
+        {
+          "id": "get_expense_report",
+          "description": "Get expense breakdown by head. Use for 'expenses this month', 'where is money going', 'expense report'. Supports pagination.",
+          "parameters": ["date_from", "date_to", "page"]
+        },
+        {
+          "id": "get_stock_summary",
+          "description": "Get stock/inventory summary. Use for 'stock of X', 'inventory', 'show stock'. Optionally filter by item name. Supports pagination.",
+          "parameters": ["item_name", "page"]
+        },
+        {
+          "id": "get_gst_summary",
+          "description": "Get GST tax summary showing input/output tax and net liability. Use for 'GST this month', 'tax liability', 'GST summary'.",
+          "parameters": ["date_from", "date_to"]
+        },
+        {
+          "id": "get_party_invoices",
+          "description": "Get invoices for a party. Use for 'invoices for Meril', 'bills of ABC', 'show invoices of X', 'sales invoices for Y'. Can filter by date and voucher type (Sales/Purchase).",
+          "parameters": ["party_name", "date_from", "date_to", "voucher_type", "page"]
+        },
+        {
+          "id": "get_invoice_pdf",
+          "description": "Get a specific invoice as PDF to share. Use for 'send invoice MB-25-26-001', 'PDF of invoice INV-100', 'share invoice #123'. Requires the exact invoice/voucher number.",
+          "parameters": ["invoice_number", "voucher_type"]
+        },
+        {
+          "id": "get_bill_outstanding",
+          "description": "Get pending bills for a party. Use for 'pending bills of Meril', 'unpaid invoices for X', 'bill outstanding'.",
+          "parameters": ["party_name"]
+        },
+        {
+          "id": "tally_status",
+          "description": "Check Tally status — is it running, HTTP responding, which companies are loaded, data folder info. Use for 'tally status', 'is tally running', 'check tally'.",
+          "parameters": []
+        },
+        {
+          "id": "list_companies",
+          "description": "List all companies loaded in Tally. Use for 'which companies', 'list companies', 'what companies are in tally'.",
+          "parameters": []
+        },
+        {
+          "id": "restart_tally",
+          "description": "Restart TallyPrime — kills and relaunches. Use for 'restart tally', 'tally not responding', 'tally stuck', 'reboot tally'.",
+          "parameters": []
+        },
+        {
+          "id": "start_tally",
+          "description": "Start TallyPrime if not running. Use for 'start tally', 'open tally', 'launch tally'.",
+          "parameters": []
+        },
+        {
+          "id": "open_company",
+          "description": "Open a specific company in Tally. Use for 'open Mobibox', 'switch to Afflink', 'load company Mobibox'. Updates tally.ini and restarts Tally with that company.",
+          "parameters": ["company_name"]
         }
       ]
     }
