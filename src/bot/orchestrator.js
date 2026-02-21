@@ -44,9 +44,21 @@ function getSmartFollowUp(action, params, result) {
       break;
     case 'get_payment_reminders':
       tips.push('💡 _"send reminder to PARTY" to send a specific reminder_');
+      tips.push('💡 _"send reminders to all" to bulk send_');
       break;
     case 'compare_periods':
       tips.push('💡 _"excel" to export this comparison_');
+      break;
+    case 'get_dashboard':
+      tips.push('💡 _"compare sales vs last month" for trends_');
+      tips.push('💡 _"cash flow forecast" for projections_');
+      break;
+    case 'get_expense_anomalies':
+      tips.push('💡 _"expenses this month" for full breakdown_');
+      break;
+    case 'get_cash_flow_forecast':
+      tips.push('💡 _"outstanding receivable" to see who owes_');
+      tips.push('💡 _"payment reminders" to collect faster_');
       break;
     case 'get_trial_balance':
     case 'get_balance_sheet':
@@ -120,6 +132,13 @@ function createOrchestrator(options = {}) {
 
   // Flag to start background services once client is ready
   let backgroundStarted = false;
+
+  // Credit limits (in-memory, reset on restart)
+  let creditLimits = {};
+
+  // Scheduled reports (in-memory)
+  let scheduledReports = [];
+  let scheduleNextId = 0;
   
   // Initialize Sarvam translation client if enabled
   let sarvamClient = null;
@@ -267,12 +286,20 @@ function createOrchestrator(options = {}) {
     }
 
     // 5) Only respond in private (1:1) chats – ignore groups when onlyPrivateChats is set
+    //    UNLESS group chat mode is enabled with a trigger prefix (e.g. "@tathastu")
+    const groupTrigger = (config.whatsapp?.groupTrigger || '').toLowerCase(); // e.g. "@tathastu"
     if (config.whatsapp?.onlyPrivateChats) {
       const chatIdStr = (chat.id && (chat.id._serialized || chat.id)) || '';
       const isGroup = chat.isGroup === true || String(chatIdStr).endsWith('@g.us');
       if (isGroup) {
-        onLog('Skip: group chat');
-        return;
+        if (groupTrigger && body.toLowerCase().startsWith(groupTrigger)) {
+          // Group chat mode: strip the trigger prefix and process
+          onLog('Group chat: trigger matched, processing');
+          // body will be cleaned below after audio handling
+        } else {
+          onLog('Skip: group chat' + (groupTrigger ? ' (no trigger prefix)' : ''));
+          return;
+        }
       }
     }
 
@@ -396,14 +423,29 @@ function createOrchestrator(options = {}) {
     let textForProcessing = userText;
     const SUPPORTED_LANGS = ['en-IN', 'en', 'hi-IN', 'gu-IN'];
 
+    // Strip group trigger prefix if present (e.g. "@tathastu show sales")
+    if (groupTrigger && textForProcessing.toLowerCase().startsWith(groupTrigger)) {
+      textForProcessing = textForProcessing.slice(groupTrigger.length).trim();
+    }
+
     let responseText;
     let attachment = null;
     let _debugAction = null, _debugParams = null, _debugTier = null;
     try {
+      // Check for confirmation of pending actions (e.g. bulk reminders)
+      const isConfirmation = /^(yes|y|haan|ha|send|bhejo|ok)$/i.test(textForProcessing.trim());
+      
       // Check for pagination commands ("more", "next", "page 2", etc.)
       const paginationMatch = textForProcessing.match(/^(?:more|next|next page|aur|aur dikhao|aage|vadhu|aagal|page\s*(\d+))$/i);
       let skillId, action, params, suggestedReply;
-      if (paginationMatch && lastAction && lastSkillId) {
+      
+      if (isConfirmation && lastAction === 'send_reminders_bulk' && lastSkillId) {
+        skillId = lastSkillId;
+        action = 'send_reminders_bulk';
+        params = { confirmed: true };
+        suggestedReply = null;
+        _debugTier = 'confirmation';
+      } else if (paginationMatch && lastAction && lastSkillId) {
         const requestedPage = paginationMatch[1] ? parseInt(paginationMatch[1], 10) : lastPage + 1;
         skillId = lastSkillId;
         action = lastAction;
@@ -510,6 +552,128 @@ function createOrchestrator(options = {}) {
             }
           } else {
             responseText = 'Please specify a company name. Example: "switch to Afflink"';
+          }
+          _debugAction = action; _debugParams = params;
+        } else if (action === 'send_reminders_bulk') {
+          // Bulk payment reminders — send to all overdue parties
+          if (!client) {
+            responseText = '⚠️ WhatsApp client not available for sending.';
+          } else if (params.confirmed === true || params.confirmed === 'true' || /^(yes|y|haan|ha|send)$/i.test(textForProcessing.trim())) {
+            // Actually send reminders
+            try {
+              const { sendToNumber } = require('../whatsapp/client');
+              const reminderResult = await registry.execute(skillId, 'get_payment_reminders', {});
+              if (!reminderResult.success || !reminderResult.data?.reminders) {
+                responseText = reminderResult.message || 'No overdue parties found.';
+              } else {
+                const reminders = reminderResult.data.reminders;
+                const compName = reminderResult.data._companyName || '';
+                let sent = 0, failed = 0, noPhone = 0;
+                const lines = ['📨 *Sending Bulk Reminders…*', ''];
+                for (const r of reminders) {
+                  if (!r.phone) { noPhone++; continue; }
+                  const partyData = { name: r.party, totalDue: r.totalDue, bills: r.bills, maxDaysOverdue: r.maxDaysOverdue };
+                  const { generateReminderMessage } = require('../skills/tally/tdl/payment-reminders');
+                  const msg = generateReminderMessage(compName, partyData);
+                  const result = await sendToNumber(client, r.phone, msg);
+                  if (result.success) {
+                    sent++;
+                    lines.push(`✅ ${r.party} — sent`);
+                  } else {
+                    failed++;
+                    lines.push(`❌ ${r.party} — failed: ${result.error}`);
+                  }
+                  // Rate limit: 3 second delay between sends
+                  await new Promise(resolve => setTimeout(resolve, 3000));
+                }
+                lines.push('', `*Summary:* ${sent} sent, ${failed} failed, ${noPhone} no phone number`);
+                responseText = lines.join('\n');
+              }
+            } catch (e) {
+              responseText = '❌ Bulk send failed: ' + (e.message || e);
+            }
+          } else {
+            // Show preview first, ask for confirmation
+            try {
+              const reminderResult = await registry.execute(skillId, 'get_payment_reminders', {});
+              responseText = (reminderResult.message || 'No overdue parties.') + '\n\n⚠️ *Reply "yes" or "send" to actually send these reminders via WhatsApp.*';
+              // Store action so "yes" triggers the send
+              lastAction = 'send_reminders_bulk';
+              lastParams = { confirmed: true };
+              lastSkillId = skillId;
+            } catch (e) {
+              responseText = '❌ Failed to fetch reminders: ' + (e.message || e);
+            }
+          }
+          _debugAction = action; _debugParams = params;
+        } else if (action === 'set_credit_limit') {
+          // Credit limit tracking (in-memory)
+          if (!creditLimits) creditLimits = {};
+          const party = params.party_name;
+          const limit = parseFloat(params.limit);
+          if (!party) {
+            responseText = 'Please specify a party name. Example: "set credit limit for Meril at 5L"';
+          } else if (isNaN(limit) || limit <= 0) {
+            responseText = 'Please specify a valid limit amount.';
+          } else {
+            creditLimits[party.toLowerCase()] = { party, limit, setAt: new Date() };
+            responseText = `✅ Credit limit set: *${party}* — ₹${limit.toLocaleString('en-IN')}`;
+          }
+          _debugAction = action; _debugParams = params;
+        } else if (action === 'check_credit_limits') {
+          if (!creditLimits || Object.keys(creditLimits).length === 0) {
+            responseText = '📭 No credit limits set. Try: "set credit limit for Meril at 5L"';
+          } else {
+            // Check each party's outstanding vs limit
+            const lines = ['📊 *Credit Limit Report*', ''];
+            let breached = 0;
+            for (const [key, cl] of Object.entries(creditLimits)) {
+              try {
+                const balResult = await registry.execute(skillId, 'get_party_balance', { party_name: cl.party });
+                const balance = balResult.data?.balance || 0;
+                const absBalance = Math.abs(balance);
+                const pct = ((absBalance / cl.limit) * 100).toFixed(0);
+                const emoji = absBalance > cl.limit ? '🔴' : absBalance > cl.limit * 0.8 ? '🟡' : '🟢';
+                if (absBalance > cl.limit) breached++;
+                lines.push(`${emoji} *${cl.party}*: ₹${absBalance.toLocaleString('en-IN')} / ₹${cl.limit.toLocaleString('en-IN')} (${pct}%)`);
+              } catch (_) {
+                lines.push(`⚠️ *${cl.party}*: Could not fetch balance`);
+              }
+            }
+            lines.push('', breached > 0 ? `⚠️ *${breached} parties exceeded their credit limit*` : '✅ All parties within limits');
+            responseText = lines.join('\n');
+          }
+          _debugAction = action; _debugParams = params;
+        } else if (action === 'schedule_report') {
+          // Scheduled reports (in-memory)
+          if (!scheduledReports) scheduledReports = [];
+          const reportAction = params.report_action || '';
+          const scheduleTime = params.schedule_time || '09:00';
+          const scheduleDays = params.schedule_days || 'daily';
+          const id = ++scheduleNextId;
+          scheduledReports.push({ id, reportAction, scheduleTime, scheduleDays, createdAt: new Date() });
+          responseText = `✅ Scheduled: "${reportAction}" — ${scheduleDays} at ${scheduleTime}\n\n_Say "show scheduled reports" to see all._`;
+          _debugAction = action; _debugParams = params;
+        } else if (action === 'list_scheduled_reports') {
+          if (!scheduledReports || scheduledReports.length === 0) {
+            responseText = '📭 No scheduled reports. Try: "schedule sales report daily at 9 AM"';
+          } else {
+            const lines = ['📅 *Scheduled Reports:*', ''];
+            for (const s of scheduledReports) {
+              lines.push(`${s.id}. "${s.reportAction}" — ${s.scheduleDays} at ${s.scheduleTime}`);
+            }
+            lines.push('', '_Say "remove schedule 1" to delete._');
+            responseText = lines.join('\n');
+          }
+          _debugAction = action; _debugParams = params;
+        } else if (action === 'remove_scheduled_report') {
+          if (!scheduledReports) scheduledReports = [];
+          const idx = scheduledReports.findIndex(s => s.id === parseInt(params.schedule_id, 10));
+          if (idx === -1) {
+            responseText = `Schedule #${params.schedule_id} not found.`;
+          } else {
+            const removed = scheduledReports.splice(idx, 1)[0];
+            responseText = `🗑️ Removed: "${removed.reportAction}" — ${removed.scheduleDays} at ${removed.scheduleTime}`;
           }
           _debugAction = action; _debugParams = params;
         } else {

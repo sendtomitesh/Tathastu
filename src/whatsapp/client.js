@@ -215,6 +215,45 @@ async function sendDocumentToSelf(client, buffer, filename, caption) {
   await client.sendMessage(selfId, media, { caption: caption || '', sendMediaAsDocument: true });
 }
 
+/**
+ * Normalize a phone number to WhatsApp chat ID format (91XXXXXXXXXX@c.us).
+ * Handles various Indian phone formats: +91..., 91..., 0..., raw 10-digit.
+ * @param {string} phone - Raw phone number from Tally
+ * @returns {string|null} WhatsApp chat ID or null if invalid
+ */
+function normalizePhoneToWaId(phone) {
+  if (!phone) return null;
+  // Strip everything except digits
+  let digits = phone.replace(/[^\d]/g, '');
+  // Remove leading 0 (trunk prefix)
+  if (digits.startsWith('0')) digits = digits.slice(1);
+  // If 10 digits, prepend 91 (India)
+  if (digits.length === 10) digits = '91' + digits;
+  // If 12 digits starting with 91, good
+  if (digits.length === 12 && digits.startsWith('91')) return digits + '@c.us';
+  // If 11+ digits with other country code, use as-is
+  if (digits.length >= 10) return digits + '@c.us';
+  return null;
+}
+
+/**
+ * Send a text message to a phone number.
+ * @param {import('whatsapp-web.js').Client} client - WhatsApp client
+ * @param {string} phone - Phone number (will be normalized)
+ * @param {string} text - Message text
+ * @returns {Promise<{success: boolean, chatId?: string, error?: string}>}
+ */
+async function sendToNumber(client, phone, text) {
+  const chatId = normalizePhoneToWaId(phone);
+  if (!chatId) return { success: false, error: 'Invalid phone number: ' + phone };
+  try {
+    await client.sendMessage(chatId, text);
+    return { success: true, chatId };
+  } catch (err) {
+    return { success: false, error: err.message || String(err) };
+  }
+}
+
 module.exports = {
   createClient,
   initialize,
@@ -222,4 +261,6 @@ module.exports = {
   sendDocument,
   sendToSelf,
   sendDocumentToSelf,
+  sendToNumber,
+  normalizePhoneToWaId,
 };

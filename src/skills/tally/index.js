@@ -1063,6 +1063,176 @@ async function execute(skillId, action, params = {}, skillConfig = {}) {
     }
   }
 
+  if (action === 'get_dashboard') {
+    try {
+      const { buildDashboardMessage } = require('./tdl/dashboard');
+      const now = new Date();
+      const y = now.getFullYear(), m = now.getMonth() + 1, d = now.getDate();
+      const pad2 = n => String(n).padStart(2, '0');
+      const todayStr = `${y}${pad2(m)}${pad2(d)}`;
+      const mtdFrom = `${y}${pad2(m)}01`;
+      const pm = m === 1 ? 12 : m - 1;
+      const py = m === 1 ? y - 1 : y;
+      const lastMonthFrom = `${py}${pad2(pm)}01`;
+      const lastMonthTo = `${py}${pad2(pm)}${pad2(new Date(py, pm, 0).getDate())}`;
+
+      const data = {};
+      // Today's sales
+      try {
+        const xml = tdlClient.buildSalesPurchaseReportTdlXml(companyName, 'sales', todayStr, todayStr);
+        const resp = await tdlClient.postTally(baseUrl, xml);
+        const parsed = tdlClient.parseSalesPurchaseReportTdlResponse(resp, 'sales', todayStr, todayStr);
+        data.todaySales = parsed.data?.total || 0;
+      } catch (_) { data.todaySales = 0; }
+      // Today's purchase
+      try {
+        const xml = tdlClient.buildSalesPurchaseReportTdlXml(companyName, 'purchase', todayStr, todayStr);
+        const resp = await tdlClient.postTally(baseUrl, xml);
+        const parsed = tdlClient.parseSalesPurchaseReportTdlResponse(resp, 'purchase', todayStr, todayStr);
+        data.todayPurchase = parsed.data?.total || 0;
+      } catch (_) { data.todayPurchase = 0; }
+      // MTD sales
+      try {
+        const xml = tdlClient.buildSalesPurchaseReportTdlXml(companyName, 'sales', mtdFrom, todayStr);
+        const resp = await tdlClient.postTally(baseUrl, xml);
+        const parsed = tdlClient.parseSalesPurchaseReportTdlResponse(resp, 'sales', mtdFrom, todayStr);
+        data.mtdSales = parsed.data?.total || 0;
+      } catch (_) { data.mtdSales = 0; }
+      // Last month sales
+      try {
+        const xml = tdlClient.buildSalesPurchaseReportTdlXml(companyName, 'sales', lastMonthFrom, lastMonthTo);
+        const resp = await tdlClient.postTally(baseUrl, xml);
+        const parsed = tdlClient.parseSalesPurchaseReportTdlResponse(resp, 'sales', lastMonthFrom, lastMonthTo);
+        data.lastMonthSales = parsed.data?.total || 0;
+      } catch (_) { data.lastMonthSales = 0; }
+      // Cash & Bank
+      try {
+        const xml = tdlClient.buildCashBankTdlXml(companyName);
+        const resp = await tdlClient.postTally(baseUrl, xml);
+        data.cashBank = tdlClient.parseCashBankTdlResponse(resp).data;
+      } catch (_) { data.cashBank = { cashBalance: 0, bankBalance: 0 }; }
+      // Outstanding
+      try {
+        const rXml = tdlClient.buildOutstandingTdlXml(companyName, 'receivable');
+        const rResp = await tdlClient.postTally(baseUrl, rXml);
+        data.receivableTotal = tdlClient.parseOutstandingTdlResponse(rResp, 'receivable').data?.total || 0;
+        const pXml = tdlClient.buildOutstandingTdlXml(companyName, 'payable');
+        const pResp = await tdlClient.postTally(baseUrl, pXml);
+        data.payableTotal = tdlClient.parseOutstandingTdlResponse(pResp, 'payable').data?.total || 0;
+      } catch (_) { data.receivableTotal = 0; data.payableTotal = 0; }
+      // Top overdue
+      try {
+        const billXml = tdlClient.buildOverdueBillsTdlXml(companyName);
+        const billResp = await tdlClient.postTally(baseUrl, billXml);
+        const { parties } = tdlClient.parseOverdueBillsResponse(billResp);
+        data.topOverdue = parties.slice(0, 3);
+      } catch (_) { data.topOverdue = []; }
+
+      const msg = buildDashboardMessage(data);
+      return { success: true, message: msg, data };
+    } catch (err) {
+      return tallyError(err, port);
+    }
+  }
+
+  if (action === 'get_expense_anomalies') {
+    try {
+      const { detectExpenseAnomalies } = require('./tdl/dashboard');
+      const now = new Date();
+      const y = now.getFullYear(), m = now.getMonth() + 1, d = now.getDate();
+      const pad2 = n => String(n).padStart(2, '0');
+      const curFrom = `${y}${pad2(m)}01`;
+      const curTo = `${y}${pad2(m)}${pad2(d)}`;
+
+      // Current month expenses
+      const curXml = tdlClient.buildExpenseReportTdlXml(companyName, curFrom, curTo);
+      const curResp = await tdlClient.postTally(baseUrl, curXml);
+      const curParsed = tdlClient.parseExpenseReportTdlResponse(curResp, curFrom, curTo);
+      const currentExpenses = (curParsed.data?.entries || []).map(e => ({ name: e.name, amount: Math.abs(e.amount) }));
+
+      // 3-month average: fetch last 3 months and average
+      const avgEntries = {};
+      for (let i = 1; i <= 3; i++) {
+        const pm = m - i <= 0 ? m - i + 12 : m - i;
+        const py = m - i <= 0 ? y - 1 : y;
+        const from = `${py}${pad2(pm)}01`;
+        const to = `${py}${pad2(pm)}${pad2(new Date(py, pm, 0).getDate())}`;
+        try {
+          const xml = tdlClient.buildExpenseReportTdlXml(companyName, from, to);
+          const resp = await tdlClient.postTally(baseUrl, xml);
+          const parsed = tdlClient.parseExpenseReportTdlResponse(resp, from, to);
+          for (const e of (parsed.data?.entries || [])) {
+            if (!avgEntries[e.name]) avgEntries[e.name] = { name: e.name, total: 0, count: 0 };
+            avgEntries[e.name].total += Math.abs(e.amount);
+            avgEntries[e.name].count++;
+          }
+        } catch (_) { /* skip month */ }
+      }
+      const avgExpenses = Object.values(avgEntries).map(e => ({ name: e.name, amount: e.total / 3 }));
+
+      const result = detectExpenseAnomalies(currentExpenses, avgExpenses);
+      return { success: true, message: result.message, data: result };
+    } catch (err) {
+      return tallyError(err, port);
+    }
+  }
+
+  if (action === 'get_cash_flow_forecast') {
+    try {
+      const { buildCashFlowForecast } = require('./tdl/dashboard');
+      const now = new Date();
+      const y = now.getFullYear(), m = now.getMonth() + 1, d = now.getDate();
+      const pad2 = n => String(n).padStart(2, '0');
+
+      // Cash & Bank
+      const cbXml = tdlClient.buildCashBankTdlXml(companyName);
+      const cbResp = await tdlClient.postTally(baseUrl, cbXml);
+      const cbData = tdlClient.parseCashBankTdlResponse(cbResp).data || {};
+
+      // Outstanding
+      let recvTotal = 0, payTotal = 0;
+      try {
+        const rXml = tdlClient.buildOutstandingTdlXml(companyName, 'receivable');
+        const rResp = await tdlClient.postTally(baseUrl, rXml);
+        recvTotal = tdlClient.parseOutstandingTdlResponse(rResp, 'receivable').data?.total || 0;
+      } catch (_) {}
+      try {
+        const pXml = tdlClient.buildOutstandingTdlXml(companyName, 'payable');
+        const pResp = await tdlClient.postTally(baseUrl, pXml);
+        payTotal = tdlClient.parseOutstandingTdlResponse(pResp, 'payable').data?.total || 0;
+      } catch (_) {}
+
+      // Avg daily sales & expenses (last 30 days)
+      const thirtyAgo = new Date(y, m - 1, d - 30);
+      const from30 = `${thirtyAgo.getFullYear()}${pad2(thirtyAgo.getMonth() + 1)}${pad2(thirtyAgo.getDate())}`;
+      const today = `${y}${pad2(m)}${pad2(d)}`;
+      let avgDailySales = 0, avgDailyExpenses = 0;
+      try {
+        const sXml = tdlClient.buildSalesPurchaseReportTdlXml(companyName, 'sales', from30, today);
+        const sResp = await tdlClient.postTally(baseUrl, sXml);
+        const sParsed = tdlClient.parseSalesPurchaseReportTdlResponse(sResp, 'sales', from30, today);
+        avgDailySales = (sParsed.data?.total || 0) / 30;
+      } catch (_) {}
+      try {
+        const eXml = tdlClient.buildExpenseReportTdlXml(companyName, from30, today);
+        const eResp = await tdlClient.postTally(baseUrl, eXml);
+        const eParsed = tdlClient.parseExpenseReportTdlResponse(eResp, from30, today);
+        avgDailyExpenses = (eParsed.data?.total || 0) / 30;
+      } catch (_) {}
+
+      const result = buildCashFlowForecast({
+        cashBalance: cbData.cashBalance || 0,
+        bankBalance: cbData.bankBalance || 0,
+        avgDailySales, avgDailyExpenses,
+        receivableTotal: recvTotal,
+        payableTotal: payTotal,
+      });
+      return { success: true, message: result.message, data: result };
+    } catch (err) {
+      return tallyError(err, port);
+    }
+  }
+
   if (action === 'compare_periods') {
     const reportType = (params.report_type || 'sales').toLowerCase();
     const period = (params.period || 'month').toLowerCase();

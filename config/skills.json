@@ -222,6 +222,51 @@
           "parameters": ["party_name"]
         },
         {
+          "id": "get_dashboard",
+          "description": "Get a business dashboard overview. Use for 'how is business', 'business summary', 'dashboard', 'karobar kaisa chal raha'. Shows today's sales, MTD, cash, outstanding, top overdue.",
+          "parameters": []
+        },
+        {
+          "id": "get_expense_anomalies",
+          "description": "Detect unusual expenses this month vs 3-month average. Use for 'any unusual expenses', 'expense anomalies', 'koi alag kharcha', 'abnormal expenses'.",
+          "parameters": []
+        },
+        {
+          "id": "get_cash_flow_forecast",
+          "description": "Simple cash flow projection for 7/15/30 days. Use for 'cash flow forecast', 'cash projection', 'paisa kitne din chalega', 'will we have enough cash'.",
+          "parameters": []
+        },
+        {
+          "id": "send_reminders_bulk",
+          "description": "Send payment reminders to all overdue parties via WhatsApp. Use for 'send reminders to all', 'bulk reminders', 'sab ko reminder bhejo'. Requires confirmation.",
+          "parameters": ["confirmed"]
+        },
+        {
+          "id": "set_credit_limit",
+          "description": "Set credit limit for a party. Use for 'set credit limit for Meril at 5L', 'credit limit for X is 50000'.",
+          "parameters": ["party_name", "limit"]
+        },
+        {
+          "id": "check_credit_limits",
+          "description": "Check which parties have exceeded their credit limits. Use for 'check credit limits', 'who crossed credit limit', 'credit limit report'.",
+          "parameters": []
+        },
+        {
+          "id": "schedule_report",
+          "description": "Schedule a report to be sent at a specific time. Use for 'send outstanding report every Monday at 9 AM', 'schedule sales report daily'.",
+          "parameters": ["report_action", "schedule_time", "schedule_days"]
+        },
+        {
+          "id": "list_scheduled_reports",
+          "description": "List all scheduled reports. Use for 'show scheduled reports', 'my scheduled reports'.",
+          "parameters": []
+        },
+        {
+          "id": "remove_scheduled_report",
+          "description": "Remove a scheduled report. Use for 'remove schedule 1', 'cancel scheduled report 2'.",
+          "parameters": ["schedule_id"]
+        },
+        {
           "id": "compare_periods",
           "description": "Compare two periods of sales, purchase, profit, or expenses. Use for 'compare sales this month vs last month', 'sales comparison', 'how did we do vs last month'. Supports period: month, quarter, year, week.",
           "parameters": ["report_type", "period"]

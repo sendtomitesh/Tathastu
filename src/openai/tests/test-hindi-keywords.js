@@ -43,6 +43,15 @@ const config = {
       { id: 'remove_alert', description: 'Remove alert', parameters: ['alert_id'] },
       { id: 'send_daily_summary', description: 'Daily summary', parameters: [] },
       { id: 'switch_company', description: 'Switch company', parameters: ['company_name'] },
+      { id: 'get_dashboard', description: 'Dashboard', parameters: [] },
+      { id: 'get_expense_anomalies', description: 'Expense anomalies', parameters: [] },
+      { id: 'get_cash_flow_forecast', description: 'Cash flow forecast', parameters: [] },
+      { id: 'send_reminders_bulk', description: 'Bulk reminders', parameters: ['confirmed'] },
+      { id: 'set_credit_limit', description: 'Set credit limit', parameters: ['party_name', 'limit'] },
+      { id: 'check_credit_limits', description: 'Check credit limits', parameters: [] },
+      { id: 'schedule_report', description: 'Schedule report', parameters: ['report_action', 'schedule_time', 'schedule_days'] },
+      { id: 'list_scheduled_reports', description: 'List scheduled', parameters: [] },
+      { id: 'remove_scheduled_report', description: 'Remove schedule', parameters: ['schedule_id'] },
     ]
   }]
 };
@@ -522,6 +531,126 @@ test('"change company to Mobibox" → switch_company(Mobibox)', () => {
   const r = kw('change company to Mobibox');
   assert(r.action === 'switch_company', `expected switch_company, got ${r.action}`);
   assert(r.params.company_name === 'mobibox', `expected mobibox, got ${r.params.company_name}`);
+});
+
+// ═══════════════════════════════════════════════
+console.log('\nDashboard / Business Overview:');
+// ═══════════════════════════════════════════════
+
+test('"how is business" → get_dashboard', () => {
+  const r = kw('how is business');
+  assert(r.action === 'get_dashboard', `expected get_dashboard, got ${r.action}`);
+});
+
+test('"business dashboard" → get_dashboard', () => {
+  const r = kw('business dashboard');
+  assert(r.action === 'get_dashboard', `expected get_dashboard, got ${r.action}`);
+});
+
+test('"karobar kaisa chal raha" → get_dashboard', () => {
+  const r = kw('karobar kaisa chal raha');
+  assert(r.action === 'get_dashboard', `expected get_dashboard, got ${r.action}`);
+});
+
+// ═══════════════════════════════════════════════
+console.log('\nExpense Anomalies:');
+// ═══════════════════════════════════════════════
+
+test('"any unusual expenses" → get_expense_anomalies', () => {
+  const r = kw('any unusual expenses');
+  assert(r.action === 'get_expense_anomalies', `expected get_expense_anomalies, got ${r.action}`);
+});
+
+test('"expense anomalies" → get_expense_anomalies', () => {
+  const r = kw('expense anomalies');
+  assert(r.action === 'get_expense_anomalies', `expected get_expense_anomalies, got ${r.action}`);
+});
+
+// ═══════════════════════════════════════════════
+console.log('\nCash Flow Forecast:');
+// ═══════════════════════════════════════════════
+
+test('"cash flow forecast" → get_cash_flow_forecast', () => {
+  const r = kw('cash flow forecast');
+  assert(r.action === 'get_cash_flow_forecast', `expected get_cash_flow_forecast, got ${r.action}`);
+});
+
+test('"paisa kitne din chalega" → get_cash_flow_forecast', () => {
+  const r = kw('paisa kitne din chalega');
+  assert(r.action === 'get_cash_flow_forecast', `expected get_cash_flow_forecast, got ${r.action}`);
+});
+
+// ═══════════════════════════════════════════════
+console.log('\nBulk Reminders:');
+// ═══════════════════════════════════════════════
+
+test('"send reminders to all" → send_reminders_bulk', () => {
+  const r = kw('send reminders to all');
+  assert(r.action === 'send_reminders_bulk', `expected send_reminders_bulk, got ${r.action}`);
+});
+
+test('"sab ko reminder bhejo" → send_reminders_bulk', () => {
+  const r = kw('sab ko reminder bhejo');
+  assert(r.action === 'send_reminders_bulk', `expected send_reminders_bulk, got ${r.action}`);
+});
+
+// ═══════════════════════════════════════════════
+console.log('\nCredit Limits:');
+// ═══════════════════════════════════════════════
+
+test('"set credit limit for Meril at 5L" → set_credit_limit(meril, 500000)', () => {
+  const r = kw('set credit limit for Meril at 5L');
+  assert(r.action === 'set_credit_limit', `expected set_credit_limit, got ${r.action}`);
+  assert(r.params.limit === 500000, `expected 500000, got ${r.params.limit}`);
+});
+
+test('"check credit limits" → check_credit_limits', () => {
+  const r = kw('check credit limits');
+  assert(r.action === 'check_credit_limits', `expected check_credit_limits, got ${r.action}`);
+});
+
+// ═══════════════════════════════════════════════
+console.log('\nScheduled Reports:');
+// ═══════════════════════════════════════════════
+
+test('"schedule sales report daily at 9 AM" → schedule_report', () => {
+  const r = kw('schedule sales report daily at 9 AM');
+  assert(r.action === 'schedule_report', `expected schedule_report, got ${r.action}`);
+});
+
+test('"show scheduled reports" → list_scheduled_reports', () => {
+  const r = kw('show scheduled reports');
+  assert(r.action === 'list_scheduled_reports', `expected list_scheduled_reports, got ${r.action}`);
+});
+
+test('"remove schedule 1" → remove_scheduled_report(1)', () => {
+  const r = kw('remove schedule 1');
+  assert(r.action === 'remove_scheduled_report', `expected remove_scheduled_report, got ${r.action}`);
+  assert(r.params.schedule_id === '1', `expected 1, got ${r.params.schedule_id}`);
+});
+
+// ═══════════════════════════════════════════════
+console.log('\nDate-Aware Keyword Patterns:');
+// ═══════════════════════════════════════════════
+
+test('"sales last month" → get_sales_report with dates', () => {
+  const r = kw('sales last month');
+  assert(r.action === 'get_sales_report', `expected get_sales_report, got ${r.action}`);
+  assert(r.params.date_from != null, 'should have date_from');
+  assert(r.params.date_to != null, 'should have date_to');
+});
+
+test('"sales this week" → get_sales_report with dates', () => {
+  const r = kw('sales this week');
+  assert(r.action === 'get_sales_report', `expected get_sales_report, got ${r.action}`);
+  assert(r.params.date_from != null, 'should have date_from');
+});
+
+test('"ledger for meril last month" → get_ledger with dates', () => {
+  const r = kw('ledger for meril last month');
+  assert(r.action === 'get_ledger', `expected get_ledger, got ${r.action}`);
+  assert(r.params.party_name === 'meril', `expected meril, got ${r.params.party_name}`);
+  assert(r.params.date_from != null, 'should have date_from');
 });
 
 // ═══════════════════════════════════════════════

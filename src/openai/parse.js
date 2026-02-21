@@ -2,6 +2,7 @@ const OpenAI = require('openai');
 const fs = require('fs');
 const path = require('path');
 const { getActionsForPrompt } = require('../config/load');
+const { parseDates, extractDatesAndClean } = require('./date-parser');
 
 // Load local knowledge base once at startup
 let _knowledgeBase = '';
@@ -44,6 +45,12 @@ function getCapabilitiesMessage() {
     '🔔 *Alerts* — "Alert me when cash below 50K", "Show my alerts"',
     '📊 *Daily Summary* — "Send summary" (auto-sends every morning)',
     '🏢 *Multi-Company* — "Switch company to Afflink"',
+    '📊 *Dashboard* — "How\'s business?" (full overview)',
+    '⚠️ *Expense Anomalies* — "Any unusual expenses?"',
+    '💰 *Cash Forecast* — "Cash flow forecast"',
+    '📨 *Bulk Reminders* — "Send reminders to all"',
+    '🏷️ *Credit Limits* — "Set credit limit for Meril at 5L"',
+    '📅 *Scheduled Reports* — "Schedule sales report daily at 9 AM"',
     '🖥️ *Tally Control* — "Tally status", "Restart tally", "Open Mobibox", "List companies"',
     '',
     'Just type naturally or send a voice note — I understand Hindi, Gujarati, English & more! 🎙️'
@@ -219,13 +226,19 @@ function parseWithKeyword(userMessage, config) {
     || text.match(/(?:party|account)\s+(?:details?|info|summary)\s+(?:of|for)\s+(.+?)(?:\s*\.|$)/i);
   if (ledgerMatch) {
     let party = ledgerMatch[1].trim().replace(/\s*\.\s*$/, '');
-    // If the captured party name contains date-related words, let OpenAI handle it for proper date extraction
+    // If the captured party name contains date-related words, extract dates with our parser
     const datePartIdx = party.search(DATE_STOP);
     if (datePartIdx > 0) {
-      // There's a date part — fall through to OpenAI so it can extract both party + dates
-      // (keyword parser can't handle dates)
+      // Extract dates from the full text, clean the party name
+      const { dates } = extractDatesAndClean(text);
+      party = party.slice(0, datePartIdx).trim();
+      if (party && party.length > 1) {
+        return { skillId: 'tally', action: 'get_ledger', params: { party_name: party, date_from: dates?.date_from || null, date_to: dates?.date_to || null }, suggestedReply: null };
+      }
     } else if (party && !DATE_STOP.test(' ' + party) && !/^(dikhao|dikha\s*do|batao|bata\s*do|batavo|show|list)$/i.test(party)) {
-      return { skillId: 'tally', action: 'get_ledger', params: { party_name: party }, suggestedReply: null };
+      // Check if the full text has date expressions even if party name doesn't
+      const { dates } = extractDatesAndClean(text);
+      return { skillId: 'tally', action: 'get_ledger', params: { party_name: party, date_from: dates?.date_from || null, date_to: dates?.date_to || null }, suggestedReply: null };
     }
     // else fall through to OpenAI for proper date extraction
   }
@@ -282,9 +295,9 @@ function parseWithKeyword(userMessage, config) {
     if (party) return { skillId: 'tally', action: 'get_party_gstin', params: { party_name: party }, suggestedReply: null };
   }
 
-  // send_reminder: "send reminder to X", "remind X"
+  // send_reminder: "send reminder to X", "remind X" (but NOT "send reminders to all" / "sab ko reminder")
   const reminderMatch = text.match(/(?:send\s+)?remind(?:er)?\s+(?:to\s+)?(.+?)(?:\s*\.|$)/i);
-  if (reminderMatch && !/^(me|us)$/i.test(reminderMatch[1].trim())) {
+  if (reminderMatch && !/^(me|us|all)$/i.test(reminderMatch[1].trim()) && !/sab\s+ko/i.test(text) && !/reminders?\s+(?:to\s+)?all/i.test(text)) {
     const party = reminderMatch[1].trim().replace(/\s*\.\s*$/, '');
     if (party) return { skillId: 'tally', action: 'send_reminder', params: { party_name: party }, suggestedReply: null };
   }
@@ -356,6 +369,61 @@ function parseWithKeyword(userMessage, config) {
     return { skillId: 'tally', action: 'switch_company', params: { company_name: multiCompMatch[1].trim() }, suggestedReply: null };
   }
 
+  // --- Dashboard / Business Overview ---
+  // "how's business", "how is business", "business dashboard", "karobar kaisa", "overview"
+  if (/how(?:'s|\s+is)\s+(?:business|things|karobar)|business\s+(?:dashboard|overview|summary)|karobar\s+kaisa|^dashboard$/i.test(text)) {
+    return { skillId: 'tally', action: 'get_dashboard', params: {}, suggestedReply: null };
+  }
+
+  // --- Expense Anomalies ---
+  // "unusual expenses", "expense anomalies", "abnormal expenses", "koi alag kharcha"
+  if (/unusual\s+expense|expense\s+anomal|abnormal\s+expense|alag\s+kharcha|unexpected\s+expense/i.test(text)) {
+    return { skillId: 'tally', action: 'get_expense_anomalies', params: {}, suggestedReply: null };
+  }
+
+  // --- Cash Flow Forecast ---
+  // "cash flow forecast", "cash projection", "paisa kitne din chalega"
+  if (/cash\s*flow\s*(?:forecast|projection)|cash\s+project|paisa\s+kitne\s+din|will\s+.*(?:enough|run\s+out)\s+cash|forecast/i.test(text)) {
+    return { skillId: 'tally', action: 'get_cash_flow_forecast', params: {}, suggestedReply: null };
+  }
+
+  // --- Bulk Reminders ---
+  // "send reminders to all", "bulk reminders", "sab ko reminder bhejo"
+  if (/send\s+reminders?\s+(?:to\s+)?all|bulk\s+remind|sab\s+ko\s+remind/i.test(text)) {
+    return { skillId: 'tally', action: 'send_reminders_bulk', params: { confirmed: false }, suggestedReply: null };
+  }
+
+  // --- Credit Limits ---
+  // "set credit limit for X at 5L"
+  const creditSetMatch = text.match(/(?:set|update)\s+credit\s+limit\s+(?:for|of)\s+(.+?)\s+(?:at|to|=)\s+(?:rs\.?\s*|₹\s*)?(\d[\d,]*(?:\.\d+)?)\s*([kKlL])?/i);
+  if (creditSetMatch) {
+    let limit = parseFloat(creditSetMatch[2].replace(/,/g, ''));
+    const suffix = (creditSetMatch[3] || '').toLowerCase();
+    if (suffix === 'k') limit *= 1000;
+    if (suffix === 'l') limit *= 100000;
+    return { skillId: 'tally', action: 'set_credit_limit', params: { party_name: creditSetMatch[1].trim(), limit }, suggestedReply: null };
+  }
+  // "check credit limits", "credit limit report"
+  if (/check\s+credit\s+limit|credit\s+limit\s+(?:report|check|status)|who\s+crossed\s+credit/i.test(text)) {
+    return { skillId: 'tally', action: 'check_credit_limits', params: {}, suggestedReply: null };
+  }
+
+  // --- Scheduled Reports ---
+  // "schedule sales report daily at 9 AM"
+  const schedMatch = text.match(/schedule\s+(.+?)\s+(?:report\s+)?(?:every|daily|weekly|on)\s+(.+)/i);
+  if (schedMatch) {
+    return { skillId: 'tally', action: 'schedule_report', params: { report_action: schedMatch[1].trim(), schedule_time: schedMatch[2].trim() }, suggestedReply: null };
+  }
+  // "show scheduled reports", "my schedules"
+  if (/(?:show|list|my)\s+schedul/i.test(text)) {
+    return { skillId: 'tally', action: 'list_scheduled_reports', params: {}, suggestedReply: null };
+  }
+  // "remove schedule 1", "cancel schedule 2"
+  const schedRemoveMatch = text.match(/(?:remove|cancel|delete)\s+schedul\w*\s+#?(\d+)/i);
+  if (schedRemoveMatch) {
+    return { skillId: 'tally', action: 'remove_scheduled_report', params: { schedule_id: schedRemoveMatch[1] }, suggestedReply: null };
+  }
+
   // --- Export (must be before voucher/report patterns) ---
 
   // "what can you export", "what can I export", "export help"
@@ -410,9 +478,10 @@ function parseWithKeyword(userMessage, config) {
 
   // sales/purchase report: "sales report", "sales this month", "purchase report", "get sales"
   // Exclude: voucher, order, invoice+create/make (those go to other actions)
-  if (/\bsales\b|\bpurchase\b/i.test(text) && !/voucher|order|(?:create|make|record|banao)\s+.*invoice/i.test(text)) {
+  if (/\bsales\b|\bpurchase\b/i.test(text) && !/voucher|order|(?:create|make|record|banao)\s+.*invoice|compar|vs\b/i.test(text)) {
     const type = /purchase/i.test(text) ? 'purchase' : 'sales';
-    return { skillId: 'tally', action: 'get_sales_report', params: { type, date_from: null, date_to: null }, suggestedReply: null };
+    const { dates } = extractDatesAndClean(text);
+    return { skillId: 'tally', action: 'get_sales_report', params: { type, date_from: dates?.date_from || null, date_to: dates?.date_to || null }, suggestedReply: null };
   }
 
   // outstanding: "outstanding", "receivable", "payable", "what do we owe", "debtors", "creditors"
