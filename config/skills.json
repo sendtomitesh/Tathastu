@@ -222,6 +222,36 @@
           "parameters": ["party_name"]
         },
         {
+          "id": "compare_periods",
+          "description": "Compare two periods of sales, purchase, profit, or expenses. Use for 'compare sales this month vs last month', 'sales comparison', 'how did we do vs last month'. Supports period: month, quarter, year, week.",
+          "parameters": ["report_type", "period"]
+        },
+        {
+          "id": "set_alert",
+          "description": "Set a threshold alert. Use for 'alert me when cash drops below 50K', 'alert when receivable above 10 lakh'. Types: cash_below, bank_below, receivable_above, payable_above.",
+          "parameters": ["alert_type", "threshold"]
+        },
+        {
+          "id": "list_alerts",
+          "description": "List all active alerts. Use for 'show my alerts', 'list alerts', 'what alerts do I have'.",
+          "parameters": []
+        },
+        {
+          "id": "remove_alert",
+          "description": "Remove an alert by ID. Use for 'remove alert 1', 'delete alert 2'.",
+          "parameters": ["alert_id"]
+        },
+        {
+          "id": "send_daily_summary",
+          "description": "Send the daily business summary now. Use for 'send summary', 'daily summary', 'business summary'.",
+          "parameters": []
+        },
+        {
+          "id": "switch_company",
+          "description": "Switch to a different company for queries without restarting Tally. Use for 'show P&L for Afflink', 'sales for Mobibox company'. Temporarily queries a different company.",
+          "parameters": ["company_name"]
+        },
+        {
           "id": "create_voucher",
           "description": "Create a voucher in Tally (Sales Invoice, Purchase, Receipt, Payment). Use for 'create sales invoice for Meril 50000', 'record payment from ABC 25000', 'create receipt'. Party must exist in Tally.",
           "parameters": ["voucher_type", "party_name", "amount", "date", "narration", "items", "ledger", "cash_ledger"]
@@ -247,5 +277,13 @@
     "contextPatterns": ["^\\d{1,2}$", "more", "next", "next page", "page \\d+", "aur", "aur dikhao", "aage", "vadhu", "aagal", "his", "her", "their", "same", "yes", "haan", "ha"],
     "correctionTriggers": ["wrong", "galat", "ખોટું", "ghalat"],
     "openAIFallbackEnabled": true
+  },
+  "scheduler": {
+    "enabled": true,
+    "summaryTime": "08:00",
+    "summaryDays": [1, 2, 3, 4, 5, 6]
+  },
+  "alerts": {
+    "enabled": true
   }
 }

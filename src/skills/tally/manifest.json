@@ -1,0 +1,261 @@
+{
+  "id": "tally",
+  "name": "TallyPrime Integration",
+  "version": "1.0.0",
+  "description": "Connect to TallyPrime accounting software via XML/HTTP API. Query ledgers, vouchers, reports, manage companies, export to Excel.",
+  "author": "Tathastu",
+  "homepage": "https://github.com/tathastu",
+  "license": "MIT",
+  "engine": "tathastu >= 1.0.0",
+  "entryPoint": "index.js",
+  "configSchema": {
+    "port": {
+      "type": "string",
+      "description": "Tally HTTP port (default: 9000)",
+      "default": "9000",
+      "required": true
+    }
+  },
+  "capabilities": [
+    "ledger-query",
+    "voucher-query",
+    "financial-reports",
+    "party-management",
+    "excel-export",
+    "tally-control",
+    "gst-reports",
+    "stock-management",
+    "order-tracking",
+    "payment-reminders",
+    "voucher-creation"
+  ],
+  "actions": [
+    {
+      "id": "get_ledger",
+      "category": "query",
+      "description": "Get ledger statement for a party",
+      "parameters": ["party_name", "date_from", "date_to", "page"]
+    },
+    {
+      "id": "get_vouchers",
+      "category": "query",
+      "description": "Get vouchers by date/type",
+      "parameters": ["date_from", "date_to", "voucher_type", "limit", "page"]
+    },
+    {
+      "id": "get_daybook",
+      "category": "query",
+      "description": "Get today's daybook entries",
+      "parameters": ["date_from", "date_to"]
+    },
+    {
+      "id": "list_ledgers",
+      "category": "query",
+      "description": "List all ledgers, optionally by group",
+      "parameters": ["group_filter", "page"]
+    },
+    {
+      "id": "get_party_gstin",
+      "category": "query",
+      "description": "Get GSTIN for a party",
+      "parameters": ["party_name"]
+    },
+    {
+      "id": "get_party_balance",
+      "category": "query",
+      "description": "Get receivable/payable balance for a party",
+      "parameters": ["party_name"]
+    },
+    {
+      "id": "get_outstanding",
+      "category": "report",
+      "description": "Outstanding receivable/payable report",
+      "parameters": ["type", "page"]
+    },
+    {
+      "id": "get_sales_report",
+      "category": "report",
+      "description": "Sales or purchase report with party breakdown",
+      "parameters": ["type", "date_from", "date_to"]
+    },
+    {
+      "id": "get_cash_bank_balance",
+      "category": "report",
+      "description": "Cash and bank balances",
+      "parameters": []
+    },
+    {
+      "id": "get_profit_loss",
+      "category": "report",
+      "description": "Profit & Loss summary",
+      "parameters": ["date_from", "date_to"]
+    },
+    {
+      "id": "get_expense_report",
+      "category": "report",
+      "description": "Expense breakdown by head",
+      "parameters": ["date_from", "date_to", "page"]
+    },
+    {
+      "id": "get_stock_summary",
+      "category": "report",
+      "description": "Stock/inventory summary",
+      "parameters": ["item_name", "page"]
+    },
+    {
+      "id": "get_gst_summary",
+      "category": "report",
+      "description": "GST tax summary",
+      "parameters": ["date_from", "date_to"]
+    },
+    {
+      "id": "get_party_invoices",
+      "category": "query",
+      "description": "Get invoices for a party",
+      "parameters": ["party_name", "date_from", "date_to", "voucher_type", "page"]
+    },
+    {
+      "id": "get_invoice_pdf",
+      "category": "export",
+      "description": "Get invoice as PDF",
+      "parameters": ["invoice_number", "voucher_type"]
+    },
+    {
+      "id": "get_bill_outstanding",
+      "category": "query",
+      "description": "Pending bills for a party",
+      "parameters": ["party_name"]
+    },
+    {
+      "id": "tally_status",
+      "category": "control",
+      "description": "Check Tally status",
+      "parameters": []
+    },
+    {
+      "id": "list_companies",
+      "category": "control",
+      "description": "List companies in Tally",
+      "parameters": []
+    },
+    {
+      "id": "restart_tally",
+      "category": "control",
+      "description": "Restart TallyPrime",
+      "parameters": []
+    },
+    {
+      "id": "start_tally",
+      "category": "control",
+      "description": "Start TallyPrime",
+      "parameters": []
+    },
+    {
+      "id": "open_company",
+      "category": "control",
+      "description": "Open a specific company",
+      "parameters": ["company_name"]
+    },
+    {
+      "id": "get_top_customers",
+      "category": "report",
+      "description": "Top customers by sales value",
+      "parameters": ["date_from", "date_to", "limit"]
+    },
+    {
+      "id": "get_top_suppliers",
+      "category": "report",
+      "description": "Top suppliers by purchase value",
+      "parameters": ["date_from", "date_to", "limit"]
+    },
+    {
+      "id": "get_top_items",
+      "category": "report",
+      "description": "Top selling/purchased items",
+      "parameters": ["type", "date_from", "date_to", "limit"]
+    },
+    {
+      "id": "get_trial_balance",
+      "category": "report",
+      "description": "Trial balance",
+      "parameters": ["date_from", "date_to"]
+    },
+    {
+      "id": "get_balance_sheet",
+      "category": "report",
+      "description": "Balance sheet",
+      "parameters": ["date_from", "date_to"]
+    },
+    {
+      "id": "get_ageing_analysis",
+      "category": "report",
+      "description": "Ageing analysis of outstanding bills",
+      "parameters": ["type"]
+    },
+    {
+      "id": "get_inactive_customers",
+      "category": "report",
+      "description": "Inactive customers",
+      "parameters": ["days"]
+    },
+    {
+      "id": "get_inactive_suppliers",
+      "category": "report",
+      "description": "Inactive suppliers",
+      "parameters": ["days"]
+    },
+    {
+      "id": "get_inactive_items",
+      "category": "report",
+      "description": "Inactive/slow-moving items",
+      "parameters": ["type", "days"]
+    },
+    {
+      "id": "export_excel",
+      "category": "export",
+      "description": "Export report as Excel",
+      "parameters": ["report_name"]
+    },
+    {
+      "id": "get_sales_orders",
+      "category": "query",
+      "description": "Sales orders",
+      "parameters": ["date_from", "date_to", "voucher_type"]
+    },
+    {
+      "id": "get_purchase_orders",
+      "category": "query",
+      "description": "Purchase orders",
+      "parameters": ["date_from", "date_to", "voucher_type"]
+    },
+    {
+      "id": "get_pending_orders",
+      "category": "query",
+      "description": "Pending/unfulfilled orders",
+      "parameters": ["type", "date_from", "date_to", "voucher_type"]
+    },
+    {
+      "id": "get_payment_reminders",
+      "category": "action",
+      "description": "Payment reminders for overdue parties",
+      "parameters": []
+    },
+    {
+      "id": "send_reminder",
+      "category": "action",
+      "description": "Send payment reminder to a party",
+      "parameters": ["party_name"]
+    },
+    {
+      "id": "create_voucher",
+      "category": "action",
+      "description": "Create a voucher in Tally",
+      "parameters": ["voucher_type", "party_name", "amount", "date", "narration", "items", "ledger", "cash_ledger"]
+    }
+  ],
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "xml2js": "^0.6.2"
+  },
+  "tags": ["accounting", "tally", "erp", "gst", "india"]
+}

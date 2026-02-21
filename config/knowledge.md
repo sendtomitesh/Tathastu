@@ -41,6 +41,27 @@
 - "devanu" / "દેવાનું" = payable
 - "aaj nu" / "આજ નું" = today's
 - "moklo" / "મોકલો" = send
+- "batavo" / "બતાવો" = show/tell
+- "ketlu" / "કેટલું" = how much
+- "badhaa" / "બધા" = all
+- "koni" / "કોની" = whose
+- "bill" / "બિલ" = invoice/bill
+
+### Common Misspellings & Variations
+- "hisab" / "hisaab" / "hisaab" = account/ledger
+- "baaki" / "baki" / "baaqi" = outstanding/remaining
+- "khaata" / "khata" / "khatta" = ledger/account
+- "bikri" / "bechaan" / "bechna" = sales
+- "kharidari" / "kharidi" / "kharid" = purchase
+- "fayda" / "faayda" / "fayeda" = profit
+- "nuksan" / "nuksaan" / "nukasan" = loss
+- "munafa" / "munaafa" = profit
+- "udhari" / "udhar" = credit/outstanding
+- "paisa" / "paise" / "rupaye" = money
+- "dikhao" / "dikha do" / "dikhado" = show
+- "batao" / "bata do" / "batado" = tell
+- "bhejo" / "bhej do" / "bhejdo" = send
+- "banao" / "bana do" / "banado" = create/make
 
 ### Common Abbreviations
 - "TB" = Trial Balance (get_trial_balance)
@@ -51,6 +72,16 @@
 - "PO" = Purchase Order (get_purchase_orders)
 - "OS" / "O/S" = Outstanding (get_outstanding)
 - "CB" = Cash & Bank (get_cash_bank_balance)
+- "DB" = Daybook (get_daybook)
+- "Inv" = Invoice (get_party_invoices or get_invoice_pdf)
+- "Vch" = Voucher (get_vouchers)
+- "Stk" = Stock (get_stock_summary)
+- "Exp" = Expenses (get_expense_report)
+- "Rcpt" = Receipt (create_voucher type=Receipt)
+- "Pymt" = Payment (create_voucher type=Payment)
+- "CN" = Credit Note
+- "DN" = Debit Note
+- "JV" = Journal Voucher
 
 ## Accounting Concepts
 
@@ -123,3 +154,23 @@
 - "Export this" / "Excel" → export_excel (uses last report)
 - "Open X company" → open_company company_name=X
 - "Switch to X" → open_company company_name=X
+- "Create invoice for X of 5000" → create_voucher type=Sales party_name=X amount=5000
+- "Record payment from X 10000" → create_voucher type=Payment party_name=X amount=10000
+- "Record receipt from X 25000" → create_voucher type=Receipt party_name=X amount=25000
+- "Make purchase bill for X 50000" → create_voucher type=Purchase party_name=X amount=50000
+- "What happened today?" → get_daybook
+- "Today's entries" → get_daybook
+- "Show me the daybook" → get_daybook
+- "Overdue payments" → get_ageing_analysis type=receivable
+- "Old dues" → get_ageing_analysis type=receivable
+- "Who stopped buying?" → get_inactive_customers
+- "Dead stock" → get_inactive_items
+- "Best customers" → get_top_customers
+- "Most sold items" → get_top_items type=sales
+- "Pending orders" → get_pending_orders type=sales
+
+### Create vs Show Disambiguation
+- "create invoice for X" / "make invoice for X" / "banao invoice X ka" → create_voucher (CREATE new)
+- "invoices for X" / "show invoices of X" / "bills of X" → get_party_invoices (SHOW existing)
+- "create" / "make" / "record" / "banao" = always means CREATE a new voucher
+- "show" / "list" / "get" / "dikhao" / "batao" = always means SHOW existing data

@@ -386,7 +386,7 @@ async function execute(skillId, action, params = {}, skillConfig = {}) {
   if (action === 'get_party_balance') {
     const partyName = params.party_name;
     if (!partyName || typeof partyName !== 'string') {
-      return { success: false, message: 'Please specify a party name.' };
+      return { success: false, message: 'Please specify a party name. Example: "Balance of Meril" or "What does ABC owe?"' };
     }
     try {
       const resolved = await resolvePartyName(partyName, baseUrl, companyName);
@@ -1058,6 +1058,60 @@ async function execute(skillId, action, params = {}, skillConfig = {}) {
         data: { party: resolved.name, phone, reminderText, totalDue: partyData.totalDue },
         _sendReminder: phone ? { phone, text: reminderText } : null,
       };
+    } catch (err) {
+      return tallyError(err, port);
+    }
+  }
+
+  if (action === 'compare_periods') {
+    const reportType = (params.report_type || 'sales').toLowerCase();
+    const period = (params.period || 'month').toLowerCase();
+    try {
+      const { buildComparisonMessage, getComparisonDates } = require('./tdl/comparison');
+      const dates = getComparisonDates(period);
+
+      // Fetch data for both periods using existing report actions
+      let currentData, previousData, metricName;
+
+      if (reportType === 'sales' || reportType === 'purchase') {
+        metricName = reportType === 'purchase' ? 'Purchase' : 'Sales';
+        const type = reportType;
+        // Current period
+        const curXml = tdlClient.buildSalesPurchaseReportTdlXml(companyName, type, dates.current.from, dates.current.to);
+        const curResp = await tdlClient.postTally(baseUrl, curXml);
+        const curParsed = tdlClient.parseSalesPurchaseReportTdlResponse(curResp, type, dates.current.from, dates.current.to);
+        // Previous period
+        const prevXml = tdlClient.buildSalesPurchaseReportTdlXml(companyName, type, dates.previous.from, dates.previous.to);
+        const prevResp = await tdlClient.postTally(baseUrl, prevXml);
+        const prevParsed = tdlClient.parseSalesPurchaseReportTdlResponse(prevResp, type, dates.previous.from, dates.previous.to);
+        currentData = { total: curParsed.data?.total || 0, entries: curParsed.data?.entries || [] };
+        previousData = { total: prevParsed.data?.total || 0, entries: prevParsed.data?.entries || [] };
+      } else if (reportType === 'profit' || reportType === 'pnl' || reportType === 'p&l') {
+        metricName = 'Profit & Loss';
+        const curXml = tdlClient.buildProfitLossTdlXml(companyName, dates.current.from, dates.current.to);
+        const curResp = await tdlClient.postTally(baseUrl, curXml);
+        const curParsed = tdlClient.parseProfitLossTdlResponse(curResp, dates.current.from, dates.current.to);
+        const prevXml = tdlClient.buildProfitLossTdlXml(companyName, dates.previous.from, dates.previous.to);
+        const prevResp = await tdlClient.postTally(baseUrl, prevXml);
+        const prevParsed = tdlClient.parseProfitLossTdlResponse(prevResp, dates.previous.from, dates.previous.to);
+        currentData = { total: curParsed.data?.netProfit || 0, entries: curParsed.data?.groups || [] };
+        previousData = { total: prevParsed.data?.netProfit || 0, entries: prevParsed.data?.groups || [] };
+      } else if (reportType === 'expense' || reportType === 'expenses') {
+        metricName = 'Expenses';
+        const curXml = tdlClient.buildExpenseReportTdlXml(companyName, dates.current.from, dates.current.to);
+        const curResp = await tdlClient.postTally(baseUrl, curXml);
+        const curParsed = tdlClient.parseExpenseReportTdlResponse(curResp, dates.current.from, dates.current.to);
+        const prevXml = tdlClient.buildExpenseReportTdlXml(companyName, dates.previous.from, dates.previous.to);
+        const prevResp = await tdlClient.postTally(baseUrl, prevXml);
+        const prevParsed = tdlClient.parseExpenseReportTdlResponse(prevResp, dates.previous.from, dates.previous.to);
+        currentData = { total: curParsed.data?.total || 0, entries: curParsed.data?.entries || [] };
+        previousData = { total: prevParsed.data?.total || 0, entries: prevParsed.data?.entries || [] };
+      } else {
+        return { success: false, message: 'Comparison supported for: sales, purchase, profit, expenses. Example: "compare sales this month vs last month"' };
+      }
+
+      const result = buildComparisonMessage(currentData, previousData, metricName, dates.current.label, dates.previous.label);
+      return { success: true, message: result.message, data: result.data };
     } catch (err) {
       return tallyError(err, port);
     }

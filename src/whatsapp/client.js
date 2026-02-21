@@ -14,20 +14,15 @@ async function throttleAfterReady(client, log) {
     // This dramatically reduces sync CPU usage while still allowing messages through
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
     log('CPU throttle applied (4x slowdown for background sync)');
-    // After 60s, reduce throttle to 2x (sync should be mostly done)
+    // After 2 min, reduce to 2x (sync should be mostly done) — keep permanently
+    // Normal Chrome throttles background tabs automatically; headless doesn't,
+    // so we keep a permanent 2x throttle to prevent CPU spikes
     setTimeout(async () => {
       try {
         await cdp.send('Emulation.setCPUThrottlingRate', { rate: 2 });
-        log('CPU throttle reduced to 2x');
+        log('CPU throttle reduced to 2x (permanent)');
       } catch (_) { /* page may be closed */ }
-    }, 60000);
-    // After 3 min, remove throttle entirely
-    setTimeout(async () => {
-      try {
-        await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
-        log('CPU throttle removed');
-      } catch (_) { /* page may be closed */ }
-    }, 180000);
+    }, 120000);
   } catch (err) {
     log('CPU throttle failed (non-critical): ' + (err.message || err));
   }
@@ -69,6 +64,16 @@ function createClient(options = {}) {
       '--metrics-recording-only',
       '--no-default-browser-check',
       '--password-store=basic',
+      // Reduce memory usage during initial sync
+      '--js-flags=--max-old-space-size=512',
+      '--disable-features=TranslateUI',
+      '--disable-logging',
+      '--disable-notifications',
+      '--disable-offer-store-unmasked-wallet-cards',
+      '--disable-speech-api',
+      '--hide-scrollbars',
+      '--mute-audio',
+      '--single-process',
     ],
   };
   // Use system Chrome when PUPPETEER_SKIP_DOWNLOAD was used (e.g. Windows)
@@ -81,30 +86,37 @@ function createClient(options = {}) {
     puppeteer: puppeteerOpts,
     // Use cached WhatsApp Web version to skip version check on startup
     webVersionCache: { type: 'local' },
+    // Don't pre-fetch messages for all chats — dramatically speeds up first login
+    // We only need real-time message events, not historical data
+    syncFullHistory: false,
   });
 
   // Verbose lifecycle logging so we can see what's happening
   const log = (...args) => console.log('[wa]', ...args);
+  const startTime = Date.now();
 
   client.on('qr', (qr) => {
-    log('QR code received');
+    log('QR code received (' + ((Date.now() - startTime) / 1000).toFixed(1) + 's)');
     if (options.onQr) options.onQr(qr);
   });
   client.on('ready', () => {
-    log('Client READY');
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    log(`Client READY (${elapsed}s from start)`);
     // Throttle CPU after ready — WhatsApp's background sync hammers the CPU
     // We only need real-time message events, not full chat sync
     throttleAfterReady(client, log);
     if (options.onReady) options.onReady();
   });
   client.on('authenticated', () => {
-    log('Authenticated');
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    log(`Authenticated (${elapsed}s)`);
     if (options.onAuthenticated) options.onAuthenticated();
   });
   client.on('auth_failure', (msg) => log('Auth failure:', msg));
   client.on('disconnected', (reason) => log('Disconnected:', reason));
   client.on('loading_screen', (percent, msg) => {
-    log('Loading:', percent + '%', msg);
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    log(`Loading: ${percent}% ${msg} (${elapsed}s)`);
     if (options.onLoadingScreen) options.onLoadingScreen(percent, msg);
   });
   client.on('change_state', (state) => log('State:', state));
@@ -164,9 +176,50 @@ async function sendDocument(message, buffer, filename, caption) {
   return await chat.sendMessage(media, { caption: caption || '', sendMediaAsDocument: true });
 }
 
+/**
+ * Send a message to the user's own Saved Messages (self-chat).
+ * Used by scheduler and alerts to push messages without a user prompt.
+ * @param {import('whatsapp-web.js').Client} client - WhatsApp client
+ * @param {string} text - Message text
+ */
+async function sendToSelf(client, text) {
+  try {
+    const info = client.info;
+    if (!info || !info.wid) throw new Error('Client not ready — no wid');
+    const selfId = info.wid._serialized;
+    await client.sendMessage(selfId, text);
+  } catch (err) {
+    console.error('[wa] sendToSelf failed:', err.message || err);
+    throw err;
+  }
+}
+
+/**
+ * Send a document/file to the user's own Saved Messages (self-chat).
+ * @param {import('whatsapp-web.js').Client} client - WhatsApp client
+ * @param {Buffer} buffer - File content
+ * @param {string} filename - Filename with extension
+ * @param {string} [caption] - Optional caption
+ */
+async function sendDocumentToSelf(client, buffer, filename, caption) {
+  const { MessageMedia } = require('whatsapp-web.js');
+  const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+  const base64 = buf.toString('base64');
+  const ext = filename.split('.').pop().toLowerCase();
+  const mimeMap = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+  const mimetype = mimeMap[ext] || 'application/octet-stream';
+  const media = new MessageMedia(mimetype, base64, filename);
+  const info = client.info;
+  if (!info || !info.wid) throw new Error('Client not ready — no wid');
+  const selfId = info.wid._serialized;
+  await client.sendMessage(selfId, media, { caption: caption || '', sendMediaAsDocument: true });
+}
+
 module.exports = {
   createClient,
   initialize,
   reply,
   sendDocument,
+  sendToSelf,
+  sendDocumentToSelf,
 };

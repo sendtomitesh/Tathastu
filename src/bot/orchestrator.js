@@ -4,6 +4,62 @@ const { parseIntent, getAvailableCommandsHelp, getCapabilitiesMessage } = requir
 const { reply, sendDocument } = require('../whatsapp/client');
 const { SarvamClient } = require('../translation/sarvam');
 const { createResolver } = require('../intent/resolver');
+const { createAlertManager } = require('./alerts');
+const { createScheduler } = require('./scheduler');
+
+/**
+ * Smart follow-ups: suggest next actions based on what the user just did.
+ */
+function getSmartFollowUp(action, params, result) {
+  // Don't suggest if result has suggestions (party disambiguation) — user needs to pick first
+  if (result.data?.suggestions) return null;
+
+  const tips = [];
+  switch (action) {
+    case 'get_outstanding':
+      tips.push('💡 _"payment reminders" to send collection reminders_');
+      tips.push('💡 _"ageing analysis" to see overdue buckets_');
+      tips.push('💡 _"excel for outstanding" to export_');
+      break;
+    case 'get_party_balance':
+      tips.push('💡 _"ledger of ' + (params.party_name || 'party') + '" for full statement_');
+      tips.push('💡 _"pending bills of ' + (params.party_name || 'party') + '" for unpaid invoices_');
+      break;
+    case 'get_ledger':
+      tips.push('💡 _"pending bills of ' + (params.party_name || 'party') + '" for unpaid invoices_');
+      tips.push('💡 _"invoices for ' + (params.party_name || 'party') + '" for invoice list_');
+      break;
+    case 'get_sales_report':
+    case 'get_profit_loss':
+    case 'get_expense_report':
+      tips.push('💡 _"compare ' + (action === 'get_sales_report' ? 'sales' : action === 'get_profit_loss' ? 'profit' : 'expenses') + ' vs last month" for comparison_');
+      tips.push('💡 _"excel" to export this report_');
+      break;
+    case 'get_party_invoices':
+      tips.push('💡 _"send invoice #NUMBER" to share as PDF_');
+      tips.push('💡 _"excel" to export_');
+      break;
+    case 'get_ageing_analysis':
+      tips.push('💡 _"payment reminders" to send collection messages_');
+      break;
+    case 'get_payment_reminders':
+      tips.push('💡 _"send reminder to PARTY" to send a specific reminder_');
+      break;
+    case 'compare_periods':
+      tips.push('💡 _"excel" to export this comparison_');
+      break;
+    case 'get_trial_balance':
+    case 'get_balance_sheet':
+    case 'get_gst_summary':
+    case 'get_stock_summary':
+    case 'get_cash_bank_balance':
+      tips.push('💡 _"excel" to export this report_');
+      break;
+    default:
+      return null;
+  }
+  return tips.length > 0 ? tips.join('\n') : null;
+}
 
 /**
  * Create an orchestrator that handles incoming WhatsApp messages:
@@ -37,6 +93,33 @@ function createOrchestrator(options = {}) {
   
   // Track last suggestions for number-based selection
   let lastSuggestions = null; // array of { name, ... }
+  
+  // Initialize alert manager if enabled
+  let alertManager = null;
+  if (config.alerts?.enabled !== false && client) {
+    try {
+      alertManager = createAlertManager({ registry, config, client, onLog });
+      // Start checking after WhatsApp is ready (client.info available)
+      // We'll start it lazily on first message when client.info is available
+      onLog('[alerts] Alert manager initialized');
+    } catch (err) {
+      onLog('[alerts] Failed to initialize: ' + (err.message || err));
+    }
+  }
+
+  // Initialize scheduler if enabled
+  let scheduler = null;
+  if (config.scheduler?.enabled && client) {
+    try {
+      scheduler = createScheduler({ registry, config, client, onLog });
+      onLog('[scheduler] Scheduler initialized');
+    } catch (err) {
+      onLog('[scheduler] Failed to initialize: ' + (err.message || err));
+    }
+  }
+
+  // Flag to start background services once client is ready
+  let backgroundStarted = false;
   
   // Initialize Sarvam translation client if enabled
   let sarvamClient = null;
@@ -300,6 +383,13 @@ function createOrchestrator(options = {}) {
 
     onLog('Msg: "' + (userText.slice(0, 25) + (userText.length > 25 ? '…' : '')) + '" fromMe=' + message.fromMe);
 
+    // Start background services (alerts, scheduler) once client is confirmed ready
+    if (!backgroundStarted && client && client.info) {
+      backgroundStarted = true;
+      if (alertManager) alertManager.start();
+      if (scheduler) scheduler.start();
+    }
+
     // Skip Sarvam for text messages — OpenAI handles English/Hindi/Gujarati text fine.
     // Sarvam is only used for audio transcription (handled above).
     // For audio messages, userLang was already set by the transcription step.
@@ -368,6 +458,61 @@ function createOrchestrator(options = {}) {
             : "I didn't quite get that. Here's what I can help with:\n\n" + getCapabilitiesMessage();
         }
       } else {
+        // Handle special orchestrator-level actions (alerts, scheduler, multi-company)
+        if (action === 'set_alert') {
+          if (alertManager) {
+            const res = alertManager.addAlert({ type: params.alert_type, threshold: params.threshold });
+            responseText = res.message;
+          } else {
+            responseText = '⚠️ Alerts are not enabled. Add `"alerts": {"enabled": true}` to config.';
+          }
+          _debugAction = action; _debugParams = params;
+        } else if (action === 'list_alerts') {
+          if (alertManager) {
+            const res = alertManager.listAlerts();
+            responseText = res.message;
+          } else {
+            responseText = '📭 No alerts system active.';
+          }
+          _debugAction = action; _debugParams = params;
+        } else if (action === 'remove_alert') {
+          if (alertManager) {
+            const res = alertManager.removeAlert(params.alert_id);
+            responseText = res.message;
+          } else {
+            responseText = '⚠️ Alerts are not enabled.';
+          }
+          _debugAction = action; _debugParams = params;
+        } else if (action === 'send_daily_summary') {
+          if (scheduler) {
+            try {
+              const res = await scheduler.sendNow();
+              responseText = res.success ? '✅ Daily summary sent to your chat.' : res.message;
+            } catch (e) {
+              responseText = '❌ Failed to send summary: ' + (e.message || e);
+            }
+          } else {
+            responseText = '⚠️ Scheduler is not enabled. Add `"scheduler": {"enabled": true}` to config.';
+          }
+          _debugAction = action; _debugParams = params;
+        } else if (action === 'switch_company') {
+          // Multi-company: temporarily switch company for the next query
+          // Store the company name preference — the skill handler will use it
+          if (params.company_name) {
+            // Execute open_company to switch Tally's active company
+            try {
+              const switchResult = await registry.execute(skillId, 'open_company', { company_name: params.company_name });
+              responseText = switchResult.success
+                ? switchResult.message
+                : (switchResult.message || 'Failed to switch company.');
+            } catch (e) {
+              responseText = '❌ Company switch failed: ' + (e.message || e);
+            }
+          } else {
+            responseText = 'Please specify a company name. Example: "switch to Afflink"';
+          }
+          _debugAction = action; _debugParams = params;
+        } else {
         // For export_excel, inject last report data or auto-fetch if needed
         if (action === 'export_excel' && !params._showHelp) {
           // Determine if user is asking for a specific report type
@@ -434,6 +579,12 @@ function createOrchestrator(options = {}) {
           ? (result.message || 'Done.')
           : (result.message || 'Action failed.');
         if (result.attachment) attachment = result.attachment;
+
+        // Smart follow-ups: append contextual suggestions based on action type
+        if (result.success && action !== 'export_excel') {
+          const followUp = getSmartFollowUp(action, params, result);
+          if (followUp) responseText += '\n\n' + followUp;
+        }
         // Store last action for pagination
         if (result.success && action !== 'export_excel') {
           lastSkillId = skillId;
@@ -453,6 +604,7 @@ function createOrchestrator(options = {}) {
           lastReportData = result.data;
           lastReportName = action.replace(/^get_/, '').replace(/_/g, ' ');
         }
+        } // close inner else (normal skill execution)
       }
     } catch (err) {
       responseText = 'Error: ' + (err.message || String(err));
@@ -519,6 +671,8 @@ function createOrchestrator(options = {}) {
     getConfig: () => config,
     getRegistry: () => registry,
     getResolver: () => resolver,
+    getAlertManager: () => alertManager,
+    getScheduler: () => scheduler,
   };
 }
 

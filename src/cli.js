@@ -16,7 +16,7 @@ const { createOrchestrator } = require('./bot/orchestrator');
 const { createClient, initialize } = require('./whatsapp/client');
 const { start: startUi } = require('./ui/server');
 
-async function runSingleTenant(config, ui) {
+async function runSingleTenant(config, ui, allClients) {
   const sessionDir = process.env.MPBOT_SESSION_DIR || '.wwebjs_auth';
   const sessionPath = path.isAbsolute(sessionDir) ? sessionDir : path.join(cwd, sessionDir);
   let waClient = null;
@@ -58,6 +58,7 @@ async function runSingleTenant(config, ui) {
       onLog: (text) => ui.addLog(text),
     });
     ui.addLog('Launching Chrome & connecting to WhatsApp…');
+    allClients.push(waClient);
     await initialize(waClient);
   }
 
@@ -100,7 +101,7 @@ async function runSingleTenant(config, ui) {
   });
 }
 
-async function runMultiTenant(config, ui) {
+async function runMultiTenant(config, ui, allClients) {
   const tenantList = config.tenants;
   for (const tenant of tenantList) {
     const sessionDir = path.isAbsolute(tenant.sessionDir) ? tenant.sessionDir : path.join(cwd, tenant.sessionDir);
@@ -137,6 +138,7 @@ async function runMultiTenant(config, ui) {
       client: waClient, 
       onLog: (text) => ui.addTenantLog(tenant.id, text)
     });
+    allClients.push(waClient);
     initialize(waClient).catch((err) => {
       ui.setTenantStatus(tenant.id, 'error', 'WhatsApp init failed: ' + (err.message || err));
       console.error('WhatsApp init failed for', tenant.id, err.message);
@@ -165,11 +167,44 @@ async function main() {
   }
   ui.openBrowser();
 
+  // Track all WhatsApp clients for cleanup
+  const allClients = [];
+
+  // Graceful shutdown: kill Chrome processes on exit
+  let shuttingDown = false;
+  async function gracefulShutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`\n[wa] ${signal} received. Shutting down…`);
+    // Destroy all WhatsApp clients (kills their Chrome processes)
+    for (const client of allClients) {
+      try {
+        await client.destroy();
+      } catch (_) { /* ignore */ }
+    }
+    // Fallback: kill any remaining Chrome processes spawned by Puppeteer
+    try {
+      require('child_process').execSync('taskkill /F /IM chrome.exe /T 2>nul', { stdio: 'ignore' });
+    } catch (_) { /* no chrome or not Windows */ }
+    console.log('[wa] Cleanup done. Exiting.');
+    process.exit(0);
+  }
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('exit', () => {
+    // Last resort: sync kill on exit (destroy is async so may not complete)
+    if (!shuttingDown) {
+      try {
+        require('child_process').execSync('taskkill /F /IM chrome.exe /T 2>nul', { stdio: 'ignore' });
+      } catch (_) { /* ignore */ }
+    }
+  });
+
   try {
     if (isMulti) {
-      await runMultiTenant(config, ui);
+      await runMultiTenant(config, ui, allClients);
     } else {
-      await runSingleTenant(config, ui);
+      await runSingleTenant(config, ui, allClients);
     }
   } catch (err) {
     if (!isMulti) {

@@ -40,6 +40,10 @@ function getCapabilitiesMessage() {
     '📨 *Payment Reminders* — "Payment reminders", "Remind Meril about payment"',
     '✏️ *Create Voucher* — "Create sales invoice for Meril 50000", "Record receipt from ABC"',
     '📊 *Excel Export* — "Export excel" (after any report)',
+    '📈 *Compare Periods* — "Compare sales vs last month", "Compare expenses quarter"',
+    '🔔 *Alerts* — "Alert me when cash below 50K", "Show my alerts"',
+    '📊 *Daily Summary* — "Send summary" (auto-sends every morning)',
+    '🏢 *Multi-Company* — "Switch company to Afflink"',
     '🖥️ *Tally Control* — "Tally status", "Restart tally", "Open Mobibox", "List companies"',
     '',
     'Just type naturally or send a voice note — I understand Hindi, Gujarati, English & more! 🎙️'
@@ -60,6 +64,7 @@ function buildSystemPrompt(config) {
     'If the previous bot reply listed suggestions (numbered list of party names), and the user replies with a number or a name from that list, use that name as the party_name and REPEAT the same action that was originally requested.',
     'For example: if user asked "ledger for meril", bot replied with a numbered list, and user says "2" or "Meril Life Sciences Pvt Ltd", return get_ledger with that party_name.',
     'ALWAYS try to extract a party_name from the user message even if partial or misspelled. Never return party_name as null if the user mentioned any name.',
+    'IMPORTANT DISAMBIGUATION: "create invoice for X" or "make invoice for X 50000" means create_voucher (creating a NEW voucher). "invoices for X" or "show invoices of X" means get_party_invoices (viewing EXISTING invoices). When the user says "create", "make", "record", "banao" — always use create_voucher. Extract amount from phrases like "of Rs. 100", "50000", "₹5000".',
     '',
     'If the message matches one of the actions below, return: {"skillId":"<id>","action":"<action>","params":{"param_name":"value"}}',
     'CRITICAL: params MUST be a JSON object with named keys, NOT an array. Example: {"party_name":"Meril"} not ["Meril"]',
@@ -219,7 +224,7 @@ function parseWithKeyword(userMessage, config) {
     if (datePartIdx > 0) {
       // There's a date part — fall through to OpenAI so it can extract both party + dates
       // (keyword parser can't handle dates)
-    } else if (party && !DATE_STOP.test(' ' + party)) {
+    } else if (party && !DATE_STOP.test(' ' + party) && !/^(dikhao|dikha\s*do|batao|bata\s*do|batavo|show|list)$/i.test(party)) {
       return { skillId: 'tally', action: 'get_ledger', params: { party_name: party }, suggestedReply: null };
     }
     // else fall through to OpenAI for proper date extraction
@@ -232,8 +237,32 @@ function parseWithKeyword(userMessage, config) {
     if (party) return { skillId: 'tally', action: 'get_party_balance', params: { party_name: party }, suggestedReply: null };
   }
 
-  // get_party_invoices: "invoices for X", "bills of X"
-  const invMatch = text.match(/(?:invoices?|bills?)\s+(?:of|for)\s+(.+?)(?:\s*\.|$)/i);
+  // create_voucher: "create invoice for meril of 100", "create sales invoice for X 50000",
+  // "record payment from ABC 25000", "create receipt from X", "banao invoice X ka 5000"
+  const createMatch = text.match(/(?:create|make|banao|bana\s*do|record)\s+(?:(sales|purchase|payment|receipt)\s+)?(?:invoice|voucher|bill|entry)\s+(?:for|of|from|to|ka|ki)\s+(.+)$/i)
+    || text.match(/(?:create|make|banao|bana\s*do|record)\s+(?:(sales|purchase|payment|receipt)\s+)?(?:invoice|voucher|bill|entry)\s+(.+)$/i)
+    || text.match(/(?:record|create)\s+(payment|receipt)\s+(?:from|to|for)\s+(.+)$/i);
+  if (createMatch) {
+    const voucherType = (createMatch[1] || 'Sales').replace(/^./, c => c.toUpperCase());
+    let rest = createMatch[2].trim().replace(/\.\s*$/, ''); // strip trailing period
+    // Extract amount: "meril of Rs. 100", "meril 50000", "meril of 100", "meril ka 5000"
+    const amtMatch = rest.match(/\s+(?:of\s+)?(?:rs\.?\s*|₹\s*)(\d[\d,]*(?:\.\d+)?)\s*$/i)
+      || rest.match(/\s+(\d[\d,]*(?:\.\d+)?)\s*(?:rs|rupees?|₹)?\s*$/i)
+      || rest.match(/(?:rs\.?\s*|₹\s*)(\d[\d,]*(?:\.\d+)?)/i);
+    let amount = null;
+    if (amtMatch) {
+      amount = parseFloat(amtMatch[1].replace(/,/g, ''));
+      rest = rest.slice(0, rest.length - amtMatch[0].length).trim();
+    }
+    // Clean party name: remove trailing "of", "ka", "ki", "for", "rs"
+    let party = rest.replace(/\s+(?:of|ka|ki|for|rs\.?)\s*$/i, '').trim();
+    if (party) {
+      return { skillId: 'tally', action: 'create_voucher', params: { voucher_type: voucherType, party_name: party, amount }, suggestedReply: null };
+    }
+  }
+
+  // get_party_invoices: "invoices for X", "bills of X" (but NOT "create invoice for X")
+  const invMatch = !(/\b(?:create|make|banao|record)\b/i.test(text)) && text.match(/(?:invoices?|bills?)\s+(?:of|for)\s+(.+?)(?:\s*\.|$)/i);
   if (invMatch) {
     const party = invMatch[1].trim().replace(/\s*\.\s*$/, '');
     if (party) return { skillId: 'tally', action: 'get_party_invoices', params: { party_name: party }, suggestedReply: null };
@@ -272,6 +301,61 @@ function parseWithKeyword(userMessage, config) {
     return { skillId: 'tally', action: 'open_company', params: { company_name: compMatch[1].trim() }, suggestedReply: null };
   }
 
+  // --- Comparison reports ---
+  // "compare sales this month vs last month", "sales comparison", "how did we do vs last month"
+  // "compare purchase month", "compare expenses quarter", "compare profit year"
+  if (/\bcompar/i.test(text) || /\bvs\b|\bversus\b/i.test(text) || /\bpichle\s+(?:mahine|hafte|saal)\s+se\b/i.test(text)) {
+    let reportType = 'sales';
+    if (/purchase|kharidi/i.test(text)) reportType = 'purchase';
+    else if (/profit|p\s*[&n]\s*l|fayda|munafa|nafa/i.test(text)) reportType = 'pnl';
+    else if (/expense|kharcha|kharche/i.test(text)) reportType = 'expenses';
+    let period = 'month';
+    if (/week|hafte/i.test(text)) period = 'week';
+    else if (/quarter|q[1-4]/i.test(text)) period = 'quarter';
+    else if (/year|saal|fy/i.test(text)) period = 'year';
+    return { skillId: 'tally', action: 'compare_periods', params: { report_type: reportType, period }, suggestedReply: null };
+  }
+
+  // --- Alerts ---
+  // "alert me when cash drops below 50K", "set alert cash below 50000"
+  // "alert when receivable above 10 lakh", "alert payable above 5L"
+  const alertSetMatch = text.match(/alert\s+(?:me\s+)?(?:when\s+)?(?:if\s+)?(cash|bank|receivable|payable)\s+(?:drops?\s+|goes?\s+|is\s+)?(?:below|above|under|over|less\s+than|more\s+than|niche|upar)\s+(?:rs\.?\s*|₹\s*)?(\d[\d,]*(?:\.\d+)?)\s*([kKlL])?/i);
+  if (alertSetMatch) {
+    const metric = alertSetMatch[1].toLowerCase();
+    let threshold = parseFloat(alertSetMatch[2].replace(/,/g, ''));
+    const suffix = (alertSetMatch[3] || '').toLowerCase();
+    if (suffix === 'k') threshold *= 1000;
+    if (suffix === 'l') threshold *= 100000;
+    const direction = /below|under|less|niche/i.test(text) ? 'below' : 'above';
+    const alertType = metric + '_' + direction;
+    return { skillId: 'tally', action: 'set_alert', params: { alert_type: alertType, threshold }, suggestedReply: null };
+  }
+
+  // "show my alerts", "list alerts", "mere alerts"
+  if (/(?:show|list|mere|mera|my)\s+alert/i.test(text) || /^alerts?$/i.test(text)) {
+    return { skillId: 'tally', action: 'list_alerts', params: {}, suggestedReply: null };
+  }
+
+  // "remove alert 1", "delete alert 2", "alert hatao 1"
+  const alertRemoveMatch = text.match(/(?:remove|delete|hatao|hata\s*do)\s+alert\s+#?(\d+)/i);
+  if (alertRemoveMatch) {
+    return { skillId: 'tally', action: 'remove_alert', params: { alert_id: alertRemoveMatch[1] }, suggestedReply: null };
+  }
+
+  // --- Daily summary ---
+  // "send summary", "daily summary", "business summary", "aaj ka summary bhejo"
+  if (/(?:send|show|bhejo)\s+(?:daily\s+)?summary|daily\s+summary|business\s+summary|aaj\s+ka\s+summary/i.test(text)) {
+    return { skillId: 'tally', action: 'send_daily_summary', params: {}, suggestedReply: null };
+  }
+
+  // --- Multi-company ---
+  // "show P&L for Afflink", "sales for Mobibox company", "switch company to X"
+  // Note: "open company X" and "switch to X" are already handled above by open_company pattern
+  const multiCompMatch = text.match(/(?:switch|change)\s+company\s+(?:to\s+)?(.+?)(?:\s*\.|$)/i);
+  if (multiCompMatch) {
+    return { skillId: 'tally', action: 'switch_company', params: { company_name: multiCompMatch[1].trim() }, suggestedReply: null };
+  }
+
   // --- Export (must be before voucher/report patterns) ---
 
   // "what can you export", "what can I export", "export help"
@@ -288,7 +372,12 @@ function parseWithKeyword(userMessage, config) {
 
   // --- Vouchers & Daybook ---
 
-  if (/voucher|day\s*book|daybook/i.test(text)) {
+  // Daybook specifically: "daybook", "day book", "today's entries", "what happened today"
+  if (/day\s*book|today'?s?\s+entr|what\s+happened\s+today/i.test(text) && !/voucher/i.test(text)) {
+    return { skillId: 'tally', action: 'get_daybook', params: { date_from: null, date_to: null }, suggestedReply: null };
+  }
+
+  if (/voucher/i.test(text)) {
     const limitMatch = text.match(/(?:last\s+)?(\d+)\s*(?:voucher|sales|purchase)?/i);
     const wantsAll = /\ball\b/i.test(text);
     const limit = wantsAll ? 0 : (limitMatch ? parseInt(limitMatch[1], 10) : 50);
@@ -320,19 +409,20 @@ function parseWithKeyword(userMessage, config) {
   }
 
   // sales/purchase report: "sales report", "sales this month", "purchase report", "get sales"
-  if (/\bsales\b|\bpurchase\b/i.test(text) && !/voucher|order/i.test(text)) {
+  // Exclude: voucher, order, invoice+create/make (those go to other actions)
+  if (/\bsales\b|\bpurchase\b/i.test(text) && !/voucher|order|(?:create|make|record|banao)\s+.*invoice/i.test(text)) {
     const type = /purchase/i.test(text) ? 'purchase' : 'sales';
     return { skillId: 'tally', action: 'get_sales_report', params: { type, date_from: null, date_to: null }, suggestedReply: null };
   }
 
-  // outstanding: "outstanding", "receivable", "payable", "what do we owe"
-  if (/outstanding|receivable|payable|what\s+(?:do\s+)?we\s+owe|who\s+owes/i.test(text)) {
+  // outstanding: "outstanding", "receivable", "payable", "what do we owe", "debtors", "creditors"
+  if (/outstanding|receivable|payable|what\s+(?:do\s+)?we\s+owe|who\s+owes|sundry\s*debtor|sundry\s*creditor/i.test(text)) {
     const type = /payable|we\s+owe|creditor/i.test(text) ? 'payable' : 'receivable';
     return { skillId: 'tally', action: 'get_outstanding', params: { type }, suggestedReply: null };
   }
 
-  // cash_bank: "bank balance", "cash in hand", "cash balance", "how much money"
-  if (/bank\s*bal|cash\s*(in\s*hand|bal)|how\s+much\s+money/i.test(text)) {
+  // cash_bank: "bank balance", "cash in hand", "cash balance", "how much money", "bank account"
+  if (/bank\s*bal|cash\s*(in\s*hand|bal)|how\s+much\s+money|bank\s+account|paisa\s+kitna/i.test(text)) {
     return { skillId: 'tally', action: 'get_cash_bank_balance', params: {}, suggestedReply: null };
   }
 
@@ -352,8 +442,8 @@ function parseWithKeyword(userMessage, config) {
     return { skillId: 'tally', action: 'get_gst_summary', params: { date_from: null, date_to: null }, suggestedReply: null };
   }
 
-  // ageing_analysis: "ageing", "aging", "overdue analysis"
-  if (/age?ing|overdue\s*analysis/i.test(text)) {
+  // ageing_analysis: "ageing", "aging", "overdue analysis", "overdue report", "old dues"
+  if (/age?ing|overdue\s*(?:analysis|report)|old\s*dues?/i.test(text)) {
     const type = /payable|creditor/i.test(text) ? 'payable' : 'receivable';
     return { skillId: 'tally', action: 'get_ageing_analysis', params: { type }, suggestedReply: null };
   }
@@ -421,6 +511,188 @@ function parseWithKeyword(userMessage, config) {
   if (/pending\s*order|unfulfilled\s*order/i.test(text)) {
     const type = /purchase/i.test(text) ? 'purchase' : 'sales';
     return { skillId: 'tally', action: 'get_pending_orders', params: { type, date_from: null, date_to: null }, suggestedReply: null };
+  }
+
+  // ── Hindi / Hinglish / Gujarati patterns ──
+
+  // Greetings in Hindi/Gujarati
+  if (/^(kem cho|kaise ho|kya hal|sab badhiya|theek hai|aur bata)\s*[?!.]?$/i.test(text))
+    return { skillId: null, action: 'unknown', params: {}, suggestedReply: "Hey! 👋 Welcome to Tathastu.\n\n" + defaultReply };
+
+  // List ledgers (Hindi/Gujarati) — must be before Hindi ledger pattern
+  // "sab ledger dikhao", "sabhi khate dikhao", "saare ledger batao"
+  if (/(?:sab|sabhi|saare)\s+(?:ledger|khate|khaate)\s*(?:dikhao|dikha\s*do|batao)/i.test(text)) {
+    return { skillId: 'tally', action: 'list_ledgers', params: { group_filter: null }, suggestedReply: null };
+  }
+  // Gujarati: "badhaa ledger batavo", "badha hisaab batavo"
+  if (/(?:badhaa?|badha)\s+(?:ledger|hisaab)\s*(?:batavo|batao|dikhao)/i.test(text)) {
+    return { skillId: 'tally', action: 'list_ledgers', params: { group_filter: null }, suggestedReply: null };
+  }
+
+  // "mujhe X dikhao" / "X dikha do" / "X batao" — generic show/tell patterns
+  // Ledger: "mujhe meril ka ledger dikhao", "meril ka hisaab", "meril ka khata"
+  const hindiLedgerMatch = text.match(/(?:mujhe\s+)?(.+?)\s+(?:ka|ki)\s+(?:ledger|hisaab|hisab|khata|statement|khaata)(?:\s+(?:dikhao|dikha\s*do|batao|bata\s*do))?$/i)
+    || text.match(/(?:ledger|hisaab|hisab|khata|khaata)\s+(?:of|for|ka|ki)\s+(.+?)(?:\s+(?:dikhao|dikha\s*do|batao|bata\s*do))?$/i);
+  if (hindiLedgerMatch) {
+    const party = hindiLedgerMatch[1].trim().replace(/\s*(dikhao|dikha\s*do|batao|bata\s*do)\s*$/i, '').trim();
+    if (party && party.length > 1 && !/^(sab|sabhi|saare|badhaa?|badha|all)$/i.test(party))
+      return { skillId: 'tally', action: 'get_ledger', params: { party_name: party }, suggestedReply: null };
+  }
+
+  // Balance: "meril ka balance", "kitna baaki hai meril ka", "meril se kitna lena hai"
+  // Party-specific: "X se kitna lena/dena hai"
+  const hindiBalSpecific = text.match(/(.+?)\s+se\s+kitna\s+(?:lena|dena)\s*(?:hai)?$/i);
+  if (hindiBalSpecific) {
+    const party = hindiBalSpecific[1].trim();
+    if (party && party.length > 1) return { skillId: 'tally', action: 'get_party_balance', params: { party_name: party }, suggestedReply: null };
+  }
+  const hindiBalMatch = text.match(/(.+?)\s+(?:ka|ki|se)\s+(?:balance|baaki|baki|udhari)/i)
+    || text.match(/(?:kitna|kitni)\s+(?:baaki|baki|lena|dena|udhari)\s+(?:hai\s+)?(.+?)(?:\s+(?:ka|ki|se))?$/i);
+  if (hindiBalMatch) {
+    const party = hindiBalMatch[1].trim().replace(/\s*(ka|ki|se|hai)\s*$/i, '').trim();
+    if (party && party.length > 1 && !/^(kitna|kitni|total|sab|sabka|mujhe)$/i.test(party))
+      return { skillId: 'tally', action: 'get_party_balance', params: { party_name: party }, suggestedReply: null };
+  }
+
+  // Sales: "mujhe sales dikhao", "sales report dikhao", "bikri dikhao"
+  if (/(?:mujhe\s+)?(?:sales|bikri|bechaan)\s*(?:report)?\s*(?:dikhao|dikha\s*do|batao)/i.test(text)) {
+    return { skillId: 'tally', action: 'get_sales_report', params: { type: 'sales', date_from: null, date_to: null }, suggestedReply: null };
+  }
+
+  // Purchase: "purchase dikhao", "kharidari dikhao"
+  if (/(?:mujhe\s+)?(?:purchase|kharidari|kharidi)\s*(?:report)?\s*(?:dikhao|dikha\s*do|batao)/i.test(text)) {
+    return { skillId: 'tally', action: 'get_sales_report', params: { type: 'purchase', date_from: null, date_to: null }, suggestedReply: null };
+  }
+
+  // Vouchers: "aaj ke voucher dikhao", "voucher dikhao"
+  if (/(?:aaj\s+ke\s+)?(?:voucher|entry|entries)\s*(?:dikhao|dikha\s*do|batao)/i.test(text)) {
+    return { skillId: 'tally', action: 'get_vouchers', params: { date_from: null, date_to: null, voucher_type: null, limit: 50 }, suggestedReply: null };
+  }
+
+  // Outstanding: "kitna lena hai", "kitna dena hai", "baaki paisa", "udhari"
+  if (/kitna\s+lena\s+hai|(?:sab\s*)?(?:ka\s+)?lena\s+(?:baaki|baki)/i.test(text)) {
+    return { skillId: 'tally', action: 'get_outstanding', params: { type: 'receivable' }, suggestedReply: null };
+  }
+  if (/kitna\s+dena\s+hai|(?:sab\s*)?(?:ka\s+)?dena\s+(?:baaki|baki)/i.test(text)) {
+    return { skillId: 'tally', action: 'get_outstanding', params: { type: 'payable' }, suggestedReply: null };
+  }
+
+  // P&L: "fayda hua ya nuksan", "profit hua", "nuksan hua"
+  if (/fayda|faayda|nuksan|nuksaan|munafa|profit\s*hua|loss\s*hua/i.test(text)) {
+    return { skillId: 'tally', action: 'get_profit_loss', params: { date_from: null, date_to: null }, suggestedReply: null };
+  }
+
+  // Expenses: "kharcha dikhao", "kharche batao", "paisa kahan ja raha"
+  if (/kharcha|kharche|paisa\s+kahan|paise\s+kahan/i.test(text)) {
+    return { skillId: 'tally', action: 'get_expense_report', params: { date_from: null, date_to: null }, suggestedReply: null };
+  }
+
+  // Cash/Bank: "bank mein kitna hai", "cash kitna hai", "paisa kitna hai"
+  if (/bank\s+(?:mein|me|mai)\s+kitna|cash\s+kitna|paisa\s+kitna/i.test(text)) {
+    return { skillId: 'tally', action: 'get_cash_bank_balance', params: {}, suggestedReply: null };
+  }
+
+  // Stock: "stock dikhao", "maal kitna hai", "inventory dikhao"
+  if (/(?:maal|stock|inventory)\s+(?:kitna|dikhao|dikha\s*do|batao)/i.test(text)) {
+    return { skillId: 'tally', action: 'get_stock_summary', params: { item_name: null }, suggestedReply: null };
+  }
+
+  // GST: "gst kitna hai", "tax dikhao"
+  if (/gst\s+(?:kitna|dikhao|batao)|tax\s+(?:kitna|dikhao|batao)/i.test(text)) {
+    return { skillId: 'tally', action: 'get_gst_summary', params: { date_from: null, date_to: null }, suggestedReply: null };
+  }
+
+  // Tally status: "tally chal raha hai", "tally chalu hai"
+  if (/tally\s+(?:chal|chalu|chaal)\s*(?:raha|rahi)?/i.test(text)) {
+    return { skillId: 'tally', action: 'tally_status', params: {}, suggestedReply: null };
+  }
+
+  // Daybook Hindi: "aaj ka daybook", "aaj ki entries", "aaj kya hua"
+  if (/aaj\s+(?:ka|ki)\s+(?:daybook|day\s*book|entry|entries)|aaj\s+kya\s+hua/i.test(text)) {
+    return { skillId: 'tally', action: 'get_daybook', params: { date_from: null, date_to: null }, suggestedReply: null };
+  }
+
+  // Trial Balance Hindi: "trial balance dikhao", "TB dikhao"
+  if (/(?:trial\s*bal|tb)\s*(?:dikhao|dikha\s*do|batao)/i.test(text)) {
+    return { skillId: 'tally', action: 'get_trial_balance', params: { date_from: null, date_to: null }, suggestedReply: null };
+  }
+
+  // Balance Sheet Hindi: "balance sheet dikhao"
+  if (/balance\s*sheet\s*(?:dikhao|dikha\s*do|batao)/i.test(text)) {
+    return { skillId: 'tally', action: 'get_balance_sheet', params: { date_from: null, date_to: null }, suggestedReply: null };
+  }
+
+  // Bill outstanding Hindi: "X ka pending bill", "X ke unpaid bill"
+  const hindiBillMatch = text.match(/(.+?)\s+(?:ka|ke|ki)\s+(?:pending|unpaid|baaki|baki)\s+(?:bill|invoice)/i);
+  if (hindiBillMatch) {
+    const party = hindiBillMatch[1].trim();
+    if (party && party.length > 1) return { skillId: 'tally', action: 'get_bill_outstanding', params: { party_name: party }, suggestedReply: null };
+  }
+
+  // Top reports Hindi: "sabse bade customer", "sabse zyada kharidne wale"
+  if (/sabse\s+(?:bade?|zyada|jyada)\s*(?:customer|client|buyer|grahak|khariddar)/i.test(text)) {
+    return { skillId: 'tally', action: 'get_top_customers', params: { date_from: null, date_to: null, limit: 10 }, suggestedReply: null };
+  }
+  if (/sabse\s+(?:bade?|zyada|jyada)\s*(?:supplier|vendor|vikreta)/i.test(text)) {
+    return { skillId: 'tally', action: 'get_top_suppliers', params: { date_from: null, date_to: null, limit: 10 }, suggestedReply: null };
+  }
+  if (/sabse\s+(?:zyada|jyada)\s*(?:bikne|bechne|biknewala|selling)/i.test(text)) {
+    return { skillId: 'tally', action: 'get_top_items', params: { type: 'sales', date_from: null, date_to: null, limit: 10 }, suggestedReply: null };
+  }
+
+  // Create voucher Hindi: "banao invoice meril ka 5000", "meril ka bill banao 10000"
+  const hindiCreateMatch = text.match(/(?:banao|bana\s*do)\s+(?:(sales|purchase|payment|receipt)\s+)?(?:invoice|voucher|bill|entry)\s+(.+)$/i)
+    || text.match(/(.+?)\s+(?:ka|ki)\s+(?:invoice|bill|voucher)\s+(?:banao|bana\s*do)(?:\s+(.+))?$/i);
+  if (hindiCreateMatch) {
+    // First pattern: "banao invoice meril ka 5000"
+    let voucherType = 'Sales';
+    let rest = '';
+    if (hindiCreateMatch[1] && /sales|purchase|payment|receipt/i.test(hindiCreateMatch[1])) {
+      voucherType = hindiCreateMatch[1].replace(/^./, c => c.toUpperCase());
+      rest = (hindiCreateMatch[2] || '').trim();
+    } else {
+      rest = (hindiCreateMatch[1] || hindiCreateMatch[2] || '').trim();
+    }
+    rest = rest.replace(/\.\s*$/, '');
+    const amtMatch2 = rest.match(/\s+(\d[\d,]*(?:\.\d+)?)\s*$/i) || rest.match(/(?:rs\.?\s*|₹\s*)(\d[\d,]*(?:\.\d+)?)/i);
+    let amount = null;
+    if (amtMatch2) {
+      amount = parseFloat(amtMatch2[1].replace(/,/g, ''));
+      rest = rest.slice(0, rest.length - amtMatch2[0].length).trim();
+    }
+    let party = rest.replace(/\s+(?:of|ka|ki|for|rs\.?)\s*$/i, '').trim();
+    if (party && party.length > 1) {
+      return { skillId: 'tally', action: 'create_voucher', params: { voucher_type: voucherType, party_name: party, amount }, suggestedReply: null };
+    }
+  }
+
+  // Ageing Hindi: "purane baaki", "overdue dikhao"
+  if (/purane?\s+(?:baaki|baki|dues?)|overdue\s+(?:dikhao|batao)/i.test(text)) {
+    return { skillId: 'tally', action: 'get_ageing_analysis', params: { type: 'receivable' }, suggestedReply: null };
+  }
+
+  // Payment reminder Hindi: "yaad dilao payment ki", "payment reminder bhejo"
+  if (/yaad\s+dilao|reminder\s+(?:bhejo|de\s*do)|payment\s+(?:yaad|reminder)/i.test(text)) {
+    return { skillId: 'tally', action: 'get_payment_reminders', params: {}, suggestedReply: null };
+  }
+
+  // Gujarati patterns for more actions
+  // Outstanding: "ketlu levanu", "ketlu devanu"
+  if (/ketlu\s+(?:levanu|levano)/i.test(text)) {
+    return { skillId: 'tally', action: 'get_outstanding', params: { type: 'receivable' }, suggestedReply: null };
+  }
+  if (/ketlu\s+(?:devanu|devanu)/i.test(text)) {
+    return { skillId: 'tally', action: 'get_outstanding', params: { type: 'payable' }, suggestedReply: null };
+  }
+
+  // Gujarati P&L: "nafa tota batavo"
+  if (/nafa\s*tota|nafa\s*nuksan/i.test(text)) {
+    return { skillId: 'tally', action: 'get_profit_loss', params: { date_from: null, date_to: null }, suggestedReply: null };
+  }
+
+  // Gujarati expenses: "kharcho batavo"
+  if (/kharcho\s*(?:batavo|batao|dikhao)/i.test(text)) {
+    return { skillId: 'tally', action: 'get_expense_report', params: { date_from: null, date_to: null }, suggestedReply: null };
   }
 
   return { skillId: null, action: 'unknown', params: {}, suggestedReply: defaultReply };

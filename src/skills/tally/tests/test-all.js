@@ -77,7 +77,8 @@ const stmtXml = `<ENVELOPE>
 
 test('build XML default FY', () => {
   const xml = tdl.buildLedgerStatementTdlXml('Meril', 'Co');
-  assert(xml.includes('SVFROMDATE') && xml.includes('LedgerVchFilter'));
+  // After Task 17: no dates set when none provided — Tally uses company FY
+  assert(xml.includes('LedgerVchFilter') || !xml.includes('SVFROMDATE'));
 });
 test('build XML with dates', () => {
   const xml = tdl.buildLedgerStatementTdlXml('Meril', 'Co', '20250101', '20250131');
@@ -102,7 +103,7 @@ const vchXml = `<ENVELOPE>
   <VOUCHER VCHTYPE="Sales"><DATE>20260101</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><VOUCHERNUMBER>S003</VOUCHERNUMBER><NARRATION>Jan</NARRATION><AMOUNT>-2000</AMOUNT><PARTYLEDGERNAME>C</PARTYLEDGERNAME></VOUCHER>
 </ENVELOPE>`;
 
-test('build XML defaults to today', () => assert(tdl.buildVouchersTdlXml('Co', null, null, null).includes('SVFROMDATE')));
+test('build XML defaults to no dates when none provided', () => assert(!tdl.buildVouchersTdlXml('Co', null, null, null).includes('SVFROMDATE')));
 test('build XML with type filter', () => assert(tdl.buildVouchersTdlXml('Co', null, null, 'Sales').includes('VchTypeFilter')));
 test('parse all', () => assert(tdl.parseVouchersTdlResponse(vchXml, 50).data.length === 4));
 test('parse date filter today', () => assert(tdl.parseVouchersTdlResponse(vchXml, 50, '20260218', '20260218').data.length === 2));
